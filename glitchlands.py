@@ -1,4 +1,4 @@
-import os, time, json, random, shutil
+import os, time, json, random, shutil, webbrowser
 from functools import cmp_to_key
 from argparse import ArgumentParser
 
@@ -32,13 +32,12 @@ class AssetLoader:
 
         self.ui = Collection()
         self.ui.add("menu_buttons", Assets.load_spritesheet("ui/menu_buttons.png", (96, 16), (192, 32)))
+        self.ui.add("menu_buttons_small", Assets.load_spritesheet(f"ui/menu_buttons_small.png", (18, 14), (36, 28)))
         self.ui.add("slot_buttons", Assets.load_spritesheet("ui/slot_buttons.png", (96, 64), (192, 128)))
         self.ui.add("switch", Assets.load_spritesheet("ui/switch.png", (64, 16), (128, 32)))
         self.ui.add("dialogue_container", Assets.load_image("ui/dialogue_container.png", (784, 160)))
         self.ui.add("crystal_counter", Assets.load_image("ui/crystal_counter.png", (48, 32)))
         self.ui.add("star", Assets.load_image("ui/star.png", (20, 20)))
-        for name in ("close", "mute_sounds"):
-            self.ui.add(name, Assets.load_spritesheet(f"ui/{name}.png", (18, 14), (36, 28)))
         self.ui.add("credits", Assets.load_text("ui/credits.txt"))
 
         terrain_image = Assets.load_image("objects/terrain.png")
@@ -435,13 +434,17 @@ class GameController:
         mx = [0, 0]
         scrollable = False
         buttons = self.assets.ui.get("menu_buttons")
+        buttons_small = self.assets.ui.get("menu_buttons_small")
         if not self.in_game and menu == MENU_MAIN:
             ui.create_graphic(self, self.assets.decoration.get("title"), cy=160, anim_delay=30)
             nums = [0, 2, 3]
             for i, num in enumerate(nums):
                 ui.create_button(self, buttons[num], (0, i), cy=320+i*40)
-            ui.create_button(self, self.assets.ui.get("close"), (0, len(nums)), cx=self.game_width-30, cy=25)
+            ui.create_button(self, buttons_small[0], (0, len(nums)), cx=self.game_width-30, cy=25)
             mx = [0, len(nums)+1]
+            if not RASPBERRY_PI:
+                ui.create_button(self, buttons_small[3], (0, len(nums)+1), cx=self.game_width-30, cy=self.game_height-25)
+                mx[1] += 1
             self.load_music()
         elif self.in_game and menu == MENU_PAUSED:
             ui.create_text(self, "Paused", cy=160)
@@ -450,8 +453,8 @@ class GameController:
                 nums.insert(-1, 12)
             for i, num in enumerate(nums):
                 ui.create_button(self, buttons[num], (0, i), cy=230+i*40)
-            ui.create_button(self, self.assets.ui.get("mute_sounds")[1 if Settings.mute_sounds else 0],
-                                (0, len(nums)), cx=self.game_width-30, cy=25)
+            ui.create_button(self, buttons_small[2 if Settings.mute_sounds else 1], (0, len(nums)),
+                             cx=self.game_width-30, cy=25)
             mx = [0, len(nums)+1]
         elif menu == MENU_SLOT_SELECT:
             if submenu in (SUBMENU_SLOT_SELECT, SUBMENU_COPY_SLOT):
@@ -652,9 +655,11 @@ class GameController:
             if sel.y == 0: self.set_menu(MENU_SLOT_SELECT)
             elif sel.y == 1: self.set_menu(MENU_SETTINGS)
             elif sel.y == 2: self.set_menu(MENU_CREDITS, SUBMENU_SKIP_CREDITS)
-            elif sel.y == sel.ymax-1:
+            elif sel.y == 3:
                 self.running = False
                 sound = None
+            elif sel.y == 4:
+                webbrowser.open("https://codefizz.itch.io/glitchlands")
         elif self.in_game and sel.menu == MENU_IN_GAME:
             return
         elif sel.menu == MENU_SLOT_SELECT:
@@ -721,7 +726,7 @@ class GameController:
             elif sel.y == sel.ymax-1: # mute
                 Settings.mute_sounds = Settings.mute_music = not Settings.mute_sounds
                 Settings.save()
-                button.update_frames(self.assets.ui.get("mute_sounds")[1 if Settings.mute_sounds else 0])
+                button.update_frames(self.assets.ui.get("menu_buttons_small")[2 if Settings.mute_sounds else 1])
                 if Settings.mute_music: self.music.stop()
                 else: self.load_music()
             elif sel.y == sel.ymax-2: # main menu

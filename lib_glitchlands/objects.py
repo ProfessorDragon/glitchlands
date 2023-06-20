@@ -1177,6 +1177,17 @@ class Npc(Activateable):
                         DialogueSlide(name, crystals=2)
                     ])
                 slides.append(DialogueSlide(name, "Best of luck on your journey."))
+            elif visited_count == 2:
+                if not visited_this:
+                    slides = [
+                        DialogueSlide(name, "Hello, adventurer."),
+                        DialogueSlide(name, "Take these crystals and venture\nnorth to seek the virus."),
+                        DialogueSlide(name, crystals=2)
+                    ]
+                else:
+                    slides = [
+                        DialogueSlide(name, "You must go north and destroy\nthe virus.")
+                    ]
         elif self.num == 1:
             name = "survivor"
             if visited_count == 0:
