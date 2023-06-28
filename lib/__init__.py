@@ -25,7 +25,7 @@ DOWN = "down"
 
 PYGAME_2 = pygame.version.vernum.major == 2
 RASPBERRY_PI = platform.uname()[4].startswith("arm")
-
+USER_NAME = os.path.expandvars("$USER" if RASPBERRY_PI else "%username%")
 MUSIC_VOLUME = SOUND_VOLUME = 1 if RASPBERRY_PI else 0.2
 
 if RASPBERRY_PI:
@@ -37,17 +37,31 @@ if RASPBERRY_PI:
 
 class Input(object):
 
-    keys = ["left", "right", "up", "down", "jump", "secondary", "escape", "start", "select", "reset", "any_button", "any_direction"]
-    left, right, up, down, jump, secondary, escape, start, select, reset, any_button, any_direction = [False for _ in range(len(keys))]
+    keys = ["left", "right", "up", "down", "stick", "jump", "secondary", "x", "y", "escape", "start", "select", "reset", "any_button", "any_direction"]
+    left, right, up, down, stick, jump, secondary, x, y, escape, start, select, reset, any_button, any_direction = [False for _ in range(len(keys))]
     mouse_visible = True
-    mcp = None
     joystick_center = (32736, 32736)
     joystick_threshold = 8000
-    ts = None
+    battery_percent = None
+    battery_charging = None
+    cpu_temp = None
+    last_hardware_update = 0
+    _mcp = None # mcp.mcp3008 instance (for analogue input)
+    _ts = None # ft5406 instance (for touchscreen)
+    _gpio = None # rpi.gpio module
+    _bus = None # smbus.smbus instance (for i2c)
 
     @staticmethod
     def init():
         if RASPBERRY_PI:
+            try:
+                import RPi.GPIO as GPIO
+            except ImportError:
+                print("Failed to load GPIO")
+            else:
+                Input._gpio = GPIO
+                GPIO.setmode(GPIO.BCM)
+                GPIO.setup(26, GPIO.IN, pull_up_down=GPIO.PUD_UP) # stick
             try:
                 import busio, digitalio, board
                 import adafruit_mcp3xxx.mcp3008 as MCP
@@ -57,32 +71,41 @@ class Input(object):
             else:
                 spi = busio.SPI(clock=board.SCK, MISO=board.MISO, MOSI=board.MOSI)
                 cs = digitalio.DigitalInOut(board.D5)
-                Input.mcp = MCP.MCP3008(spi, cs)
-                Input.joystick_x = AnalogIn(Input.mcp, MCP.P0)
-                Input.joystick_y = AnalogIn(Input.mcp, MCP.P1)
+                Input._mcp = MCP.MCP3008(spi, cs)
+                Input.joystick_x = AnalogIn(Input._mcp, MCP.P0)
+                Input.joystick_y = AnalogIn(Input._mcp, MCP.P1)
+                Input.joystick_button = AnalogIn(Input._mcp, MCP.P2)
                 time.sleep(0.5)
                 Input.joystick_center = Input.joystick_x.value, Input.joystick_y.value
             try:
-                Input.ts = ft5406.Touchscreen(device="raspberrypi-ts")
+                import smbus
+            except ImportError:
+                print("Failed to load I2C")
+            else:
+                Input._bus = smbus.SMBus(1)
+            try:
+                Input._ts = ft5406.Touchscreen(device="raspberrypi-ts")
             except RuntimeError:
                 print("Failed to locate touchscreen")
             else:
-                Input.ts.run()
+                Input._ts.run()
 
     @staticmethod
     def stop():
-        if Input.ts is not None:
-            Input.ts.stop()
+        if Input._ts is not None:
+            Input._ts.stop()
+        if Input._gpio is not None:
+            Input._gpio.cleanup()
 
     @staticmethod
     def get_joystick():
-        if Input.mcp is None: return (0, 0)
+        if Input._mcp is None: return (0, 0)
         return -(Input.joystick_x.value-Input.joystick_center[0]), -(Input.joystick_y.value-Input.joystick_center[1])
     
     @staticmethod
     def set_touch_handlers(press=None, release=None, move=None):
-        if Input.ts is None: return
-        for touch in Input.ts.touches:
+        if Input._ts is None: return
+        for touch in Input._ts.touches:
             touch.on_press = press
             touch.on_release = release
             touch.on_move = move
@@ -99,18 +122,38 @@ class Input(object):
     @staticmethod
     def update(keys):
         jx, jy = Input.get_joystick()
-        Input.left = keys[K_LEFT] or keys[K_a] or keys[K_KP_4] or jx < -Input.joystick_threshold
-        Input.right = keys[K_RIGHT] or keys[K_d] or keys[K_KP_6] or jx > Input.joystick_threshold
-        Input.up = keys[K_UP] or keys[K_w] or keys[K_KP_8] or jy < -Input.joystick_threshold
-        Input.down = keys[K_DOWN] or keys[K_s] or keys[K_KP_2] or jy > Input.joystick_threshold
+        Input.left = keys[K_LEFT] or keys[K_a] or keys[K_KP4] or jx < -Input.joystick_threshold
+        Input.right = keys[K_RIGHT] or keys[K_d] or keys[K_KP6] or jx > Input.joystick_threshold
+        Input.up = keys[K_UP] or keys[K_w] or keys[K_KP8] or jy < -Input.joystick_threshold
+        Input.down = keys[K_DOWN] or keys[K_s] or keys[K_KP2] or jy > Input.joystick_threshold
+        Input.stick = Input._gpio is not None and not Input._gpio.input(26)
         Input.jump = keys[K_SPACE] or keys[K_k] # or btn_a
         Input.secondary = keys[K_e] or keys[K_l] or keys[K_SLASH] or keys[K_KP_PLUS] # or btn_b
+        Input.x = keys[K_o] # or btn_x
+        Input.y = keys[K_i] # or btn_y
         Input.start = keys[K_RETURN] or keys[K_KP_ENTER] # or btn_start
         Input.select = keys[K_TAB] # or btn_select
         Input.escape = keys[K_ESCAPE]
         Input.reset = keys[K_r]
         Input.any_button = any([Input.jump, Input.secondary, Input.start, Input.select, Input.escape, Input.reset])
         Input.any_direction = any([Input.left, Input.right, Input.up, Input.down])
+    
+    @staticmethod
+    def update_hardware(force=False):
+        if not force and time.perf_counter()-Input.last_hardware_update < 0.5:
+            return False
+        Input.last_hardware_update = time.perf_counter()
+        if Input._bus is not None:
+            bat = Input._bus.read_byte_data(0x57, 0x2a)
+            if Input.battery_percent is None: Input.battery_percent = bat
+            else: Input.battery_percent = min(max(bat, Input.battery_percent-2), Input.battery_percent+2)
+            Input.battery_charging = Input._bus.read_byte_data(0x57, 0x02) >> 7 & 1 == 1
+            Input.cpu_temp = Input._bus.read_byte_data(0x57, 0x04)-40
+        return True
+    
+    @staticmethod
+    def get_key_dict():
+        return {name: getattr(Input, name) for name in Input.keys}
 
 
 ## SETTINGS ##
@@ -143,7 +186,8 @@ class SettingsBase(object):
     @classmethod
     def log(cls):
         for k in vars(cls):
-            print(f"{k}: {cls.get(k)}")
+            if k not in ("__module__", "all", "presets", "display_names"):
+                print(f"{k}: {cls.get(k)}")
 
     @classmethod
     def save(cls):
@@ -173,7 +217,7 @@ class Settings(SettingsBase):
         "pi": {
             "fullscreen_refresh": True,
             "maintain_fullscreen_ratio": False,
-            "low_detail": False,
+            "low_detail": True,
             "reduce_motion": False,
             "enable_transparency": False,
             "enable_shaders": False,
@@ -382,6 +426,18 @@ class Collection:
 
 class Assets(object):
     asset_dir = os.getcwd()+os.pathsep
+    debug_font = None
+    status_font = None
+    status_icons = None
+
+    @staticmethod
+    def init():
+        asset_dir = Assets.asset_dir
+        Assets.asset_dir = os.getcwd()
+        Assets.debug_font = pygame.font.SysFont("Helvetica", 13)
+        Assets.status_font = pygame.font.SysFont("Helvetica", 14, bold=True)
+        Assets.status_icons = Assets.load_spritesheet("assets/status_icons.png", (9, 9), (18, 18))
+        Assets.asset_dir = asset_dir
 
     @staticmethod
     def set_dir(folder=""):
@@ -536,3 +592,27 @@ class Assets(object):
             for y in range(im.get_height()//tileh+1):
                 im.blit(tile, (x*tilew, y*tileh))
         return im
+    
+    @staticmethod
+    def status_indicator(rjust=False):
+        surface = Assets.sized_surface(96, 20 if Input.cpu_temp is None else 40)
+        x = surface.get_width()-18-4 if rjust else 4
+        y = 0
+        if Input.battery_percent is not None:
+            icon = 4 if Input.battery_charging else 0
+            if Input.battery_percent > 30: icon += 1
+            if Input.battery_percent > 50: icon += 1
+            if Input.battery_percent > 75: icon += 1
+            surface.blit(Assets.status_icons[icon], (x, y))
+            text = Assets.status_font.render(f"{Input.battery_percent}%", False, WHITE)
+            surface.blit(text, (x-text.get_width()-4 if rjust else x+22, y))
+            y += 20
+        if Input.cpu_temp is not None:
+            icon = 8
+            if Input.cpu_temp > 25: icon += 1
+            if Input.cpu_temp > 45: icon += 1
+            surface.blit(Assets.status_icons[icon], (x, y))
+            text = Assets.status_font.render(f"{Input.cpu_temp}°C", False, WHITE)
+            surface.blit(text, (x-text.get_width()-4 if rjust else x+22, y))
+            y += 20
+        return surface

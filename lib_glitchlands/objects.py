@@ -2081,6 +2081,7 @@ class VirusBoss(Object):
             self.ATTACK_BLUE_GLITCH_HORIZONTAL,
             self.ATTACK_GREEN_GLITCH_HORIZONTAL):
             self.xv = 9 if self.facing_right else -9
+            self.yv = [0.2, 0.1, 0][self.gc.difficulty]
         self.x += self.xv
         self.y += self.yv
         if self.x != self.rect.centerx or self.y != self.rect.centery:

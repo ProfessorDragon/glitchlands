@@ -3,7 +3,7 @@ from functools import cmp_to_key
 from argparse import ArgumentParser
 
 import pygame
-pygame.mixer.pre_init(44100, -16, 2, 64)
+pygame.mixer.pre_init(44100, 8, 2, 512)
 pygame.init()
 try: from PygameShader import shader
 except ImportError: shader = None
@@ -33,11 +33,11 @@ class AssetLoader:
         self.ui = Collection()
         self.ui.add("menu_buttons", Assets.load_spritesheet("ui/menu_buttons.png", (96, 16), (192, 32)))
         self.ui.add("menu_buttons_small", Assets.load_spritesheet(f"ui/menu_buttons_small.png", (18, 14), (36, 28)))
+        self.ui.add("menu_icons", Assets.load_spritesheet("ui/menu_icons.png", (9, 9), (18, 18)))
         self.ui.add("slot_buttons", Assets.load_spritesheet("ui/slot_buttons.png", (96, 64), (192, 128)))
         self.ui.add("switch", Assets.load_spritesheet("ui/switch.png", (64, 16), (128, 32)))
         self.ui.add("dialogue_container", Assets.load_image("ui/dialogue_container.png", (784, 160)))
         self.ui.add("crystal_counter", Assets.load_image("ui/crystal_counter.png", (48, 32)))
-        self.ui.add("star", Assets.load_image("ui/star.png", (20, 20)))
         self.ui.add("credits", Assets.load_text("ui/credits.txt"))
 
         terrain_image = Assets.load_image("objects/terrain.png")
@@ -148,8 +148,7 @@ class AssetLoader:
             im.blit(text, (cx-text.get_width()//2, 10))
         if save_data is not None:
             if save_data.get("defeated_virus", False):
-                star = self.ui.get("star")
-                im.blit(star, (im.get_width()-star.get_width()-10, 10))
+                im.blit(self.ui.get("menu_icons")[0], (im.get_width()-10-18, 10))
             text = self.font_small.render(["Rookie", "Normal", "Master"][save_data.get("difficulty", 0)])
             im.blit(text, (cx-text.get_width()//2, 42))
             hours, rem = divmod(save_data.get("elapsed_time", 0), 3600)
@@ -215,10 +214,17 @@ class GameController:
             outsize = (self.game_width*(i-1), self.game_height*(i-1))
         else:
             outsize = self.screen_size
-        flags = pygame.DOUBLEBUF
-        flags |= pygame.RESIZABLE if Settings.windowed else pygame.FULLSCREEN
-        if PYGAME_2: self.main_surface = pygame.display.set_mode(outsize, flags, vsync=Settings.vsync)
-        else: self.main_surface = pygame.display.set_mode(outsize, flags)
+        flags = pygame.RESIZABLE if Settings.windowed else pygame.FULLSCREEN
+        if PYGAME_2:
+            flags |= pygame.DOUBLEBUF
+        else:
+            flags |= pygame.HWSURFACE | pygame.HWACCEL | pygame.ASYNCBLIT
+        if PYGAME_2 and not RASPBERRY_PI:
+            self.main_surface = pygame.display.set_mode(outsize, flags, vsync=Settings.vsync)
+        else:
+            self.main_surface = pygame.display.set_mode(outsize, flags)
+        if not Settings.enable_transparency:
+            self.main_surface.set_alpha(None)
         self.output_size = self.output_width, self.output_height = self.main_surface.get_size()
         self.screen = pygame.Surface(self.game_size)
         self.force_full_refresh = True
@@ -251,6 +257,7 @@ class GameController:
         self.screen_info = pygame.display.Info()
         self.screen_size = self.screen_width, self.screen_height = self.screen_info.current_w, self.screen_info.current_h
         self.init_display()
+        Assets.init()
         Input.init()
         Input.set_touch_handlers(
             press=self.handle_touch_event,
@@ -273,7 +280,6 @@ class GameController:
         self.difficulty = 1
         self.transition = None
         self.music = MusicManager()
-        self.debug_font = pygame.font.SysFont("Helvetica", 13)
         self.set_menu(MENU_MAIN)
     
     def save_progress(self):
@@ -321,6 +327,7 @@ class GameController:
             else:
                 self.xscroll = 0
                 self.xscroll_target = 0
+            self.force_full_refresh = True
             self.append_visited(cp.level_pos, only_next=True)
             self.load_level_full(cp.level_pos)
             self.create_levels_auto(clear=True)
@@ -540,7 +547,6 @@ class GameController:
             level_icons = [] # (num, x, y)
             teleporter_lines = [] # (x1, y1, x2, y2)
             for world, world_data in enumerate(self.assets.map.get("data")):
-                if self.level.level_pos[0] > 0 and world == 0: continue
                 for pos_string, tile_data in world_data.get("levels", {}).items():
                     pos = (world,)+tuple(int(n) for n in pos_string.split(","))
                     if pos not in visited and pos != self.level.level_pos: continue
@@ -846,6 +852,7 @@ class GameController:
                 Input.escape, Input.start, Input.select, Input.secondary, Input.jump and self.npc_dialogue.shown
             ])
         else:
+            Input.update_hardware()
             if not Settings.reduce_motion and not self.in_game:
                 self.background.update()
             for obj in self.ui_objects:
@@ -971,6 +978,18 @@ class GameController:
             self.rects.append(obj.draw())
         if self.transition is not None:
             self.rects.append(self.transition.draw())
+
+    def draw_overlays(self):
+        y = 0
+        if Settings.show_fps:
+            fps = round(self.clock.get_fps(), 2)
+            text = Assets.debug_font.render(str(fps), False, WHITE)
+            self.rects.append(self.screen_out.blit(text, (2, y-1)))
+            y += 16
+        if not (self.in_game and self.selection.menu == MENU_IN_GAME) and RASPBERRY_PI:
+            indicator = Assets.status_indicator()
+            self.screen_out.blit(indicator, (0, y))
+            y += indicator.get_height()
 
     def scale_rect(self, rect, xscale, yscale):
         new = rect.copy()
@@ -1163,7 +1182,7 @@ class GameController:
             self.create_level(self.level_left, -1)
         self.load_music()
         if self.background.num != self.level.background:
-            self.background.change_to(self.level.background, side=-1 if level_loaded else 0)
+            self.background.change_to(self.level.background, side=-1 if level_loaded and not Settings.low_detail else 0)
             self.force_full_refresh = True
         self.set_checkpoint(bottom=self.level.checkpoint_positions[2], right=self.game_width)
         self.player.update_hitbox()
@@ -1197,7 +1216,7 @@ class GameController:
             self.create_level(self.level_right, 1)
         self.load_music()
         if self.background.num != self.level.background:
-            self.background.change_to(self.level.background, side=1 if level_loaded else 0)
+            self.background.change_to(self.level.background, side=1 if level_loaded and not Settings.low_detail else 0)
             self.force_full_refresh = True
         self.set_checkpoint(bottom=self.level.checkpoint_positions[0], left=0)
     
@@ -1300,7 +1319,7 @@ class GameController:
 
             self.draw()
             self.rects = list(filter(lambda rect: rect is not None, self.rects))
-            out = self.screen.copy()
+            self.screen_out = self.screen.copy()
             if Settings.enable_shaders and (self.glitch_chance >= 0 or not self.in_game):
                 if not self.in_game or random.randint(0, self.glitch_chance)//2 > 0:
                     if self.in_game and self.selection.menu == MENU_IN_GAME:
@@ -1310,15 +1329,15 @@ class GameController:
                     else:
                         cx, cy = self.game_width//2, self.game_height//2
                         amount = 0.005
-                    out = shader.chromatic(out, min(max(cx, 0), self.game_width), min(max(cy, 0), self.game_height),
-                                           .9999, fx=amount)
+                    self.screen_out = shader.chromatic(
+                        self.screen_out,
+                        min(max(cx, 0), self.game_width), min(max(cy, 0), self.game_height),
+                        .9999, fx=amount
+                    )
                 elif random.randint(0, 1) == 0:
-                    shader.tv_scan(out, random.randint(5, 20))
-            if Settings.show_fps:
-                fps = round(self.clock.get_fps(), 2)
-                text = self.debug_font.render(str(fps), not Settings.low_detail, RED)
-                self.rects.append(out.blit(text, (2, -1)))
-            self.main_surface.blit(pygame.transform.scale(out, self.output_size), (0, 0))
+                    shader.tv_scan(self.screen_out, random.randint(5, 20))
+            self.draw_overlays()
+            self.main_surface.blit(pygame.transform.scale(self.screen_out, self.output_size), (0, 0))
             if self.force_full_refresh or Settings.fullscreen_refresh:
                 pygame.display.update()
             else:
