@@ -11,8 +11,14 @@ def create_button(gc, *args, **kwargs):
     gc.ui_objects.append(obj)
     return obj
 
-def create_text(gc, text, cx=None, cy=None):
-    return create_graphic(gc, gc.assets.font_outlined.render(text), cx=cx, cy=cy)
+def create_slider(gc, *args, **kwargs):
+    obj = Slider(gc, *args, **kwargs)
+    gc.ui_objects.append(obj)
+    return obj
+
+def create_text(gc, text, cx=None, cy=None, font=None):
+    if font is None: font = gc.assets.font_outlined
+    return create_graphic(gc, font.render(text), cx=cx, cy=cy)
 
 class Graphic(pygame.sprite.Sprite):
     def __init__(self, gc, frames, cx=None, cy=None, anim_delay=3):
@@ -47,10 +53,38 @@ class Button(Graphic):
     def update_frames(self, frames):
         super().update_frames(frames)
         self.height += 2
-        self.image = Assets.sized_surface(self.width, self.height)
-        self.image.blit(self.frames[0], (0, 2))
-        self.image.blit(self.frames[0], (0, 0))
-        self.pressed_image = Assets.sized_surface(self.width, self.height)
-        self.pressed_image.blit(self.frames[0], (0, 2))
+        self.unpressed_frames, self.pressed_frames = [], []
+        for frame in self.frames:
+            im = Assets.sized_surface(self.width, self.height)
+            im.blit(frame, (0, 2))
+            im.blit(frame, (0, 0))
+            self.unpressed_frames.append(im)
+            im = Assets.sized_surface(self.width, self.height)
+            im.blit(frame, (0, 2))
+            self.pressed_frames.append(im)
+    def update(self):
+        return
     def draw(self):
-        return self.gc.screen.blit(self.pressed_image if self.gc.selection.idx in self.indexes else self.image, self.adjusted_rect)
+        return self.gc.screen.blit(
+            (self.pressed_frames if self.gc.selection.idx in self.indexes else self.unpressed_frames)[self.anim_frame],
+            self.adjusted_rect
+        )
+
+class Slider(Button):
+    def __init__(self, gc, setting, max_=1, indexes=None, cx=None, cy=None, callback=None):
+        super().__init__(gc, gc.assets.ui.get("slider"), indexes, cx=cx, cy=cy)
+        self.setting = setting
+        self.callback = callback
+        self.max = max_/(len(self.frames)-1)
+        self.anim_frame = min(max(int(round(Settings.get(setting)/self.max)), 0), len(self.frames)-1)
+    def set(self, frame):
+        prev = round(self.anim_frame*self.max, 2)
+        self.anim_frame = min(max(frame, 0), len(self.frames)-1)
+        cur = round(self.anim_frame*self.max, 2)
+        Settings.set(self.setting, cur)
+        Settings.save()
+        if callable(self.callback) and prev != cur: self.callback(prev, cur)
+    def set_percent(self, percent):
+        self.set(int(round(percent*(len(self.frames)-1))))
+    def increment(self, amount):
+        self.set(self.anim_frame+amount)

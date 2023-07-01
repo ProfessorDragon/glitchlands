@@ -2,15 +2,15 @@ import os, time, json, random, shutil, webbrowser
 from functools import cmp_to_key
 from argparse import ArgumentParser
 
-import pygame
-pygame.mixer.pre_init(44100, 8, 2, 512)
-pygame.init()
-try: from PygameShader import shader
-except ImportError: shader = None
-
 from lib import*
 from lib_glitchlands import*
 from lib_glitchlands import player, objects, ui, particles
+
+import pygame
+pygame.mixer.pre_init(44100, 8 if RASPBERRY_PI else -16, 2, 512)
+pygame.init()
+try: from PygameShader import shader
+except ImportError: shader = None
 
 
 class AssetLoader:
@@ -20,7 +20,7 @@ class AssetLoader:
     def load(self): # load main assets
         self.player = Assets.load_spritesheet_dir("player", (32, 32), (64, 64), hflip=True, vflip=True)
         self.backgrounds = Assets.load_spritesheet("ui/backgrounds.png", (64, 64), alpha=False)
-        self.sounds = Assets.load_sound_dir("sounds", volume=SOUND_VOLUME)
+        self.sounds = Assets.load_sound_dir("sounds")
         self.font = Assets.load_font("ui/font.png", (10, 12), (20, 24))
         self.font.set_char_widths(.5, "'")
         self.font_outlined = Assets.load_font("ui/font_outlined.png", (12, 14), (24, 28))
@@ -36,8 +36,10 @@ class AssetLoader:
         self.ui.add("menu_icons", Assets.load_spritesheet("ui/menu_icons.png", (9, 9), (18, 18)))
         self.ui.add("slot_buttons", Assets.load_spritesheet("ui/slot_buttons.png", (96, 64), (192, 128)))
         self.ui.add("switch", Assets.load_spritesheet("ui/switch.png", (64, 16), (128, 32)))
+        self.ui.add("slider", Assets.load_spritesheet("ui/slider.png", (64, 8), (128, 16)))
         self.ui.add("dialogue_container", Assets.load_image("ui/dialogue_container.png", (784, 160)))
         self.ui.add("crystal_counter", Assets.load_image("ui/crystal_counter.png", (48, 32)))
+        self.ui.add("key_icons", Assets.load_spritesheet("ui/key_icons.png", (12, 12), (24, 24)))
         self.ui.add("credits", Assets.load_text("ui/credits.txt"))
 
         terrain_image = Assets.load_image("objects/terrain.png")
@@ -77,7 +79,6 @@ class AssetLoader:
         self.decoration.add("upgrade_deco_1", self.objects["upgrades"].get(x=0, y=0))
         self.decoration.add("upgrade_deco_2", self.objects["upgrades"].get(x=0, y=1))
         self.decoration.add("upgrade_deco_3", self.objects["upgrades"].get(x=0, y=2))
-        self.decoration.add("key_icons", Assets.load_spritesheet("decoration/key_icons.png", (12, 12), (24, 24)))
         self.decoration.add("vines", Assets.load_spritesheet("decoration/vines.png", (48, 48), (96, 96)))
         self.decoration.add("virus_transition", Assets.load_image("virus/transition.png", (800, 480), alpha=False))
 
@@ -239,6 +240,7 @@ class GameController:
         self.npc_dialogue = DialogueState()
         self.xscroll, self.xscroll_target = 0, 0
         self.scroll_bounds = int(self.game_width*.51)
+        self.ambience_timer = None
         self.visited_levels = {self.level.level_pos}
         self.visited_npcs = set()
         self.visited_one_ways = set()
@@ -396,7 +398,7 @@ class GameController:
             self.level_bottom = None
     
     def load_music(self, name=None):
-        if Settings.mute_music:
+        if Settings.volume_music == 0:
             self.music.load(None)
             return
         if name is None: # no name specified, auto-detect
@@ -410,9 +412,11 @@ class GameController:
             name = None
         self.music.load(name)
 
-    def play_sound(self, name):
-        if not Settings.mute_sounds:
-            self.assets.sounds.get(name).play()
+    def play_sound(self, name, volume=1):
+        if Settings.volume_sfx == 0: return
+        sound = self.assets.sounds.get(name)
+        sound.set_volume(Settings.volume_sfx*volume)
+        sound.play()
 
     def get_block_objects(self):
         return self.objects_nocollide+self.objects_collide
@@ -435,6 +439,11 @@ class GameController:
         self.elapsed_time_start = time.perf_counter()
         self.set_menu(MENU_IN_GAME)
         self.force_full_refresh = True
+    
+    def adjust_music_volume(self, prev, cur):
+        if cur == 0: self.music.stop()
+        elif prev == 0: self.load_music()
+        else: pygame.mixer.music.set_volume(cur)
 
     def set_menu(self, menu, submenu=0, idx=(0, 0)):
         self.ui_objects = []
@@ -450,7 +459,7 @@ class GameController:
             ui.create_button(self, buttons_small[0], (0, len(nums)), cx=self.game_width-30, cy=25)
             mx = [0, len(nums)+1]
             if not RASPBERRY_PI:
-                ui.create_button(self, buttons_small[3], (0, len(nums)+1), cx=self.game_width-30, cy=self.game_height-25)
+                ui.create_button(self, buttons_small[1], (0, len(nums)+1), cx=self.game_width-30, cy=self.game_height-25)
                 mx[1] += 1
             self.load_music()
         elif self.in_game and menu == MENU_PAUSED:
@@ -460,9 +469,7 @@ class GameController:
                 nums.insert(-1, 12)
             for i, num in enumerate(nums):
                 ui.create_button(self, buttons[num], (0, i), cy=230+i*40)
-            ui.create_button(self, buttons_small[2 if Settings.mute_sounds else 1], (0, len(nums)),
-                             cx=self.game_width-30, cy=25)
-            mx = [0, len(nums)+1]
+            mx = [0, len(nums)]
         elif menu == MENU_SLOT_SELECT:
             if submenu in (SUBMENU_SLOT_SELECT, SUBMENU_COPY_SLOT):
                 if submenu == SUBMENU_SLOT_SELECT:
@@ -491,13 +498,20 @@ class GameController:
         elif menu == MENU_SETTINGS:
             switch = self.assets.ui.get("switch")
             ui.create_text(self, "Settings", cy=70)
+            x = self.game_width//2
             for i, attr in enumerate(self.shown_settings):
-                text = ui.create_text(self, Settings.display_names[attr], cy=130+i*40)
-                text.rect.right = self.game_width//2+50
-                obj = ui.create_button(self, switch[1 if Settings.get(attr) else 2], (0, i), cy=130+i*40)
-                obj.rect.left = self.game_width//2+70
-            ui.create_button(self, buttons[1], (0, len(self.shown_settings)), cy=430)
-            mx = [0, len(self.shown_settings)+1]
+                text = ui.create_text(self, Settings.display_names[attr], cy=150+i*40)
+                text.rect.right = x-20
+                obj = ui.create_button(self, switch[1 if Settings.get(attr) else 2], (0, i), cy=150+i*40)
+                obj.rect.left = x
+            x += 270
+            ui.create_text(self, "Music", cx=x, cy=210)
+            ui.create_slider(self, "volume_music", 0.5, (0, len(self.shown_settings)), cx=x, cy=235,
+                             callback=self.adjust_music_volume)
+            ui.create_text(self, "SFX", cx=x, cy=275)
+            ui.create_slider(self, "volume_sfx", 0.5, (0, len(self.shown_settings)+1), cx=x, cy=300)
+            ui.create_button(self, buttons[1], (0, len(self.shown_settings)+2), cx=x, cy=390)
+            mx = [0, len(self.shown_settings)+3]
         elif menu in (MENU_CREDITS, MENU_COMPLETION):
             self.background.still_image = Assets.sized_surface(self.game_size)
             self.background.still_image.fill((30, 30, 30))
@@ -634,7 +648,7 @@ class GameController:
                 text = ui.create_text(self, str(self.crystal_count), cy=y)
                 text.rect.left = 44
                 text.fixed = text.hide_ok = True
-            graphic = ui.create_graphic(self, self.assets.decoration["key_icons"][1 if RASPBERRY_PI else 0],
+            graphic = ui.create_graphic(self, self.assets.ui["key_icons"][1 if RASPBERRY_PI else 0],
                                         cx=24, cy=self.game_height-24)
             graphic.fixed = graphic.hide_ok = True
             text = ui.create_text(self, "Hide UI", cy=self.game_height-24)
@@ -709,7 +723,7 @@ class GameController:
             if sel.y == sel.ymax-1:
                 self.set_menu(sel.prev_menu)
                 sound = "return"
-            else:
+            elif sel.y < len(self.shown_settings)-1:
                 attr = self.shown_settings[sel.y]
                 enabled = not Settings.get(attr)
                 Settings.set(attr, enabled)
@@ -729,18 +743,12 @@ class GameController:
                 sound = None
             elif sel.y == 1: # settings
                 self.set_menu(MENU_SETTINGS)
-            elif sel.y == sel.ymax-1: # mute
-                Settings.mute_sounds = Settings.mute_music = not Settings.mute_sounds
-                Settings.save()
-                button.update_frames(self.assets.ui.get("menu_buttons_small")[2 if Settings.mute_sounds else 1])
-                if Settings.mute_music: self.music.stop()
-                else: self.load_music()
-            elif sel.y == sel.ymax-2: # main menu
+            elif sel.y == sel.ymax-1: # main menu
                 self.in_game = False
                 self.level = None
                 self.set_menu(MENU_MAIN)
                 sound = "return"
-            elif sel.y == sel.ymax-3: # skip (if available)
+            elif sel.y == sel.ymax-2: # skip (if available)
                 self.set_menu(MENU_IN_GAME)
                 self.player.abilities.set_all(False)
                 self.glitch_chance = 3000
@@ -777,8 +785,11 @@ class GameController:
         for button in self.ui_objects:
             if isinstance(button, ui.Button) and len(button.indexes) > 0 and button.rect.inflate(4, 2).collidepoint(x, y):
                 self.selection.set(button.indexes[0])
+                if isinstance(button, ui.Slider) and self.selection.mouse_pressed:
+                    button.set_percent((x-button.rect.left-12)/(button.rect.width-24))
                 break
-        if prev != self.selection.idx and self.selection.idx != None: self.play_sound("hover")
+        if prev != self.selection.idx and self.selection.idx != None:
+            self.play_sound("hover")
 
     def update_objects(self, objs):
         i = 0
@@ -820,6 +831,12 @@ class GameController:
                 else:
                     block = random.choice(self.get_block_objects())
                     if isinstance(block, objects.Block): block.generate_glitch_image()
+            if self.ambience_timer is None or self.ambience_timer == 0:
+                if self.ambience_timer == 0 and self.level.level_pos[0] > 0:
+                    self.play_sound(f"ambience_{random.randint(1, 6)}", 0.8)
+                self.ambience_timer = random.randint(10*60, 30*60)
+            else:
+                self.ambience_timer -= 1
             if not Settings.reduce_motion:
                 self.background.update()
             self.update_objects(self.objects_collide)
@@ -831,11 +848,11 @@ class GameController:
                     self.xscroll = self.xscroll_target
                 else:
                     self.xscroll += (self.xscroll_target-self.xscroll)/8
-                    if abs(self.xscroll_target-self.xscroll) < 3: self.xscroll = self.xscroll_target
+                    if abs(self.xscroll_target-self.xscroll) < 2: self.xscroll = self.xscroll_target
             if not self.selection.button_pressed:
                 if Input.escape or Input.start:
                     self.enable_pause()
-                elif (Input.jump or Input.secondary) and self.npc_dialogue.shown:
+                elif (Input.primary or Input.secondary) and self.npc_dialogue.shown:
                     if self.npc_dialogue.change_frame > 0 and self.npc_dialogue.current.crystals == 0:
                         self.npc_dialogue.advance()
                         if self.npc_dialogue.hidden:
@@ -849,7 +866,7 @@ class GameController:
                 self.player.update_attacks()
             self.npc_dialogue.update()
             self.selection.button_pressed = any([
-                Input.escape, Input.start, Input.select, Input.secondary, Input.jump and self.npc_dialogue.shown
+                Input.escape, Input.start, Input.select, Input.secondary, Input.primary and self.npc_dialogue.shown
             ])
         else:
             Input.update_hardware()
@@ -858,7 +875,7 @@ class GameController:
             for obj in self.ui_objects:
                 obj.update()
             if self.selection.menu == MENU_CREDITS:
-                self.selection.y -= 3 if Input.jump else 1
+                self.selection.y -= 3 if Input.primary else 1
                 if self.selection.y < -740-26*self.assets.ui.get("credits").count("\n"):
                     self.in_game = False
                     self.level = None
@@ -870,7 +887,7 @@ class GameController:
                 if Input.select and not self.selection.button_pressed:
                     self.disable_pause()
                 elif Input.any_direction and not Input.select:
-                    amount = 15 if Input.jump else 10
+                    amount = 15 if Input.primary else 10
                     if Input.left: self.selection.x += amount
                     if Input.right: self.selection.x -= amount
                     if Input.up: self.selection.y += amount
@@ -894,20 +911,32 @@ class GameController:
                         else:
                             self.set_menu(self.selection.prev_menu)
                             self.play_sound("return")
-                if Input.jump or Input.start:
+                if Input.primary or Input.start:
                     self.launch_selection()
             self.selection.button_pressed = Input.any_button
             if Input.any_direction:
-                if perf-self.selection.direction_time > 0.2 and not self.selection.scrollable:
+                if perf-self.selection.direction_time > self.selection.direction_delay and not self.selection.scrollable:
                     prev = self.selection.idx[:]
+                    for button in self.ui_objects:
+                        if isinstance(button, ui.Button) and self.selection.idx in button.indexes:
+                            break
+                    self.selection.direction_delay = 0.2
                     if Input.down: self.selection.increment(0, 1)
                     if Input.up: self.selection.increment(0, -1)
-                    if Input.left: self.selection.increment(-1, 0)
-                    if Input.right: self.selection.increment(1, 0)
+                    if Input.left:
+                        if isinstance(button, ui.Slider):
+                            button.increment(-1)
+                            self.selection.direction_delay = 0.1
+                        else: self.selection.increment(-1, 0)
+                    if Input.right:
+                        if isinstance(button, ui.Slider):
+                            button.increment(1)
+                            self.selection.direction_delay = 0.1
+                        else: self.selection.increment(1, 0)
                     if prev != self.selection.idx: self.play_sound("hover")
                     self.selection.direction_time = perf
             else:
-                self.selection.direction_time = 0
+                self.selection.direction_delay = 0
         if self.transition is not None:
             self.transition.update()
         self.music.update()
@@ -956,30 +985,31 @@ class GameController:
                 self.rects.append(deco.draw())
                 if Settings.show_hitboxes:
                     self.rects.append(deco.draw_hitbox())
-            if self.npc_dialogue.shown and self.npc_dialogue.current.content is not None:
-                container = self.assets.ui.get("dialogue_container")
-                self.screen.blit(container, (
-                    self.game_width//2-container.get_width()//2,
-                    self.game_height-container.get_height()-8
-                ))
-                content = self.assets.font.render(self.npc_dialogue.current.content)
-                self.screen.blit(content, (
-                    self.game_width//2-content.get_width()//2,
-                    self.game_height-80-content.get_height()//2-max(4-self.npc_dialogue.change_frame, 0)
-                ))
-                owner = self.assets.font.render(self.npc_dialogue.current.owner)
-                self.screen.blit(owner, (40, self.game_height-160))
         else:
             if self.force_full_refresh or Settings.fullscreen_refresh:
                 self.background.draw()
         for obj in self.ui_objects:
-            if obj.hide_ok and Input.jump:
+            if obj.hide_ok and Input.primary:
                 continue
             self.rects.append(obj.draw())
-        if self.transition is not None:
-            self.rects.append(self.transition.draw())
 
     def draw_overlays(self):
+        if self.in_game and self.selection.menu == MENU_IN_GAME:
+            if self.npc_dialogue.shown and self.npc_dialogue.current.content is not None:
+                container = self.assets.ui.get("dialogue_container")
+                self.screen_out.blit(container, (
+                    self.game_width//2-container.get_width()//2,
+                    self.game_height-container.get_height()-8
+                ))
+                content = self.assets.font.render(self.npc_dialogue.current.content)
+                self.screen_out.blit(content, (
+                    self.game_width//2-content.get_width()//2,
+                    self.game_height-80-content.get_height()//2-max(4-self.npc_dialogue.change_frame, 0)
+                ))
+                owner = self.assets.font.render(self.npc_dialogue.current.owner)
+                self.screen_out.blit(owner, (40, self.game_height-160))
+        if self.transition is not None:
+            self.rects.append(self.transition.draw())
         y = 0
         if Settings.show_fps:
             fps = round(self.clock.get_fps(), 2)
@@ -1312,19 +1342,23 @@ class GameController:
                         else:
                             self.selection.enable_mouse()
                             self.update_cursor_selection()
-                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                    if not RASPBERRY_PI:
+                elif event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP) and event.button == 1 and not RASPBERRY_PI:
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        self.selection.mouse_pressed = True
+                        self.update_cursor_selection()
+                    else:
+                        self.selection.mouse_pressed = False
                         self.launch_selection()
             self.update()
 
             self.draw()
             self.rects = list(filter(lambda rect: rect is not None, self.rects))
             self.screen_out = self.screen.copy()
-            if Settings.enable_shaders and (self.glitch_chance >= 0 or not self.in_game):
-                if not self.in_game or random.randint(0, self.glitch_chance)//2 > 0:
+            if Settings.enable_shaders:
+                if not self.in_game or self.glitch_chance <= 0 or random.randint(0, self.glitch_chance)//2 > 0:
                     if self.in_game and self.selection.menu == MENU_IN_GAME:
                         cx, cy = self.game_width//2, self.player.y+self.player.recth//2
-                        amount = (4000-self.glitch_chance)/200000
+                        amount = (4000-self.glitch_chance)/200000 if self.glitch_chance > 0 else 0.008
                         if self.level.level_pos[0] == 0: cy = self.game_height//2
                     else:
                         cx, cy = self.game_width//2, self.game_height//2

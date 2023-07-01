@@ -36,7 +36,7 @@ def create_object(gc, level, config, **kwargs):
     }[typ](*args, **kwargs)
 
 def generate_tip_image(gc, text, *icon_nums):
-    icons = gc.assets.decoration["key_icons"]
+    icons = gc.assets.ui["key_icons"]
     text_image = gc.assets.font_outlined.render(text)
     if len(icon_nums) == 0:
         return text_image
@@ -985,7 +985,7 @@ class UpgradeTip(Object):
         self.tip_data = [
             ["Jump", jump_num], ["Double jump", jump_num, jump_num], ["Run", 3, 4],
             ["Collide with red\nglitch zones"], ["Teleport with green\nglitch zones"], ["Interact with blue\nglitch zones"],
-            ["View map", 5], ["Use lightbeam\nThe virus' only weakness", 1]
+            ["View map", 6], ["Use lightbeam\nThe virus' only weakness", 1]
         ][self.num]
         self.image = generate_tip_image(self.gc, self.tip_data[0], *self.tip_data[1:])
         self.rect = pygame.Rect(self.x+self.tilew-self.image.get_width()//2, self.y, self.image.get_width(), self.image.get_height())
@@ -1476,12 +1476,14 @@ class VirusBoss(Object):
         self.health = 3
         self.hurt_timer = 0
         self.attack_count = 0
+        self.max_attacks = 22
         self.level_order = {}
         levels = list(range(6))
         random.shuffle(levels)
-        for i, atk in enumerate((4, 12, 24)):
+        for i, atk in enumerate((4, 11, 20)):
             self.level_order[atk] = levels[i]
         self.arena_barrier = None
+        self.boss_bar = None
         self.set_attack(self.ATTACK_TOMBSTONE if self.gc.defeated_virus else self.ATTACK_INTRO)
     
     def spawn_explode_particles(self):
@@ -2087,12 +2089,17 @@ class VirusBoss(Object):
         if self.x != self.rect.centerx or self.y != self.rect.centery:
             self.rect.center = self.x, self.y
             self.update_hitbox()
-        if self.arena_barrier is None and self.attack != self.ATTACK_TOMBSTONE:
+        if self.attack != self.ATTACK_TOMBSTONE and self.arena_barrier is None:
             obj = ArenaBarrier(self.gc, self.level, {
                 "x": self.gc.game_width//2,
                 "y": self.gc.game_height-self.tileh
             })
             self.arena_barrier = obj
+            self.gc.push_object(obj)
+            obj = BossBar(self.gc, self.level, {
+                "owner": self
+            })
+            self.boss_bar = obj
             self.gc.push_object(obj)
             self.gc.load_music("boss")
 
@@ -2131,6 +2138,35 @@ class VirusBoss(Object):
             amount = (self.hurt_timer-4)/4*128
             im.fill((amount, amount, amount, 0), special_flags=pygame.BLEND_RGBA_ADD)
         return self.blit_image(im, self.rect)
+
+class BossBar(Object):
+    def update_config(self, config):
+        super().update_config(config)
+        self.owner = config.get("owner")
+        if self.owner is None:
+            self.self_destruct = True
+            return
+        self.position = -4
+        self.rect = pygame.Rect(32, self.position, self.gc.game_width-64, 8)
+        self.image = Assets.sized_surface(self.rect.size)
+        color = (33, 31, 48)
+        pygame.draw.rect(self.image, BLACK, (2, 2, self.rect.width-4, self.rect.height-4))
+        pygame.draw.rect(self.image, color, (0, 2, 2, self.rect.height-4))
+        pygame.draw.rect(self.image, color, (self.rect.width-2, 2, 2, self.rect.height-4))
+        pygame.draw.rect(self.image, color, (2, 0, self.rect.width-4, 2))
+        pygame.draw.rect(self.image, color, (2, self.rect.height-2, self.rect.width-4, 2))
+        self.update_hitbox()
+        self.color = [(52, 215, 51), (51, 62, 215), (215, 51, 51)][self.gc.difficulty]
+        self.target_y = 0
+        self.layer = 9999
+    def update(self):
+        if self.rect.y != self.target_y:
+            ofs = (self.target_y-self.rect.y)/8
+            self.rect.y += math.floor(ofs) if self.rect.y > self.target_y else math.ceil(ofs)
+        target = self.owner.attack_count/self.owner.max_attacks*(self.rect.width-4)
+        self.position += (target-self.position)/(8 if self.owner.attack_count == self.owner.max_attacks else 30)
+        if abs(target-self.position) < 1: self.position = target
+        pygame.draw.rect(self.image, self.color, (2, 2, self.position, self.rect.h-4))
 
 class VirusTentacle(Object):
     def update_config(self, config):

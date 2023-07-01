@@ -26,7 +26,6 @@ DOWN = "down"
 PYGAME_2 = pygame.version.vernum.major == 2
 RASPBERRY_PI = platform.uname()[4].startswith("arm")
 USER_NAME = os.path.expandvars("$USER" if RASPBERRY_PI else "%username%")
-MUSIC_VOLUME = SOUND_VOLUME = 1 if RASPBERRY_PI else 0.2
 
 if RASPBERRY_PI:
     import warnings
@@ -127,15 +126,15 @@ class Input(object):
         Input.up = keys[K_UP] or keys[K_w] or keys[K_KP8] or jy < -Input.joystick_threshold
         Input.down = keys[K_DOWN] or keys[K_s] or keys[K_KP2] or jy > Input.joystick_threshold
         Input.stick = Input._gpio is not None and not Input._gpio.input(26)
-        Input.jump = keys[K_SPACE] or keys[K_k] # or btn_a
-        Input.secondary = keys[K_e] or keys[K_l] or keys[K_SLASH] or keys[K_KP_PLUS] # or btn_b
-        Input.x = keys[K_o] # or btn_x
+        Input.primary = keys[K_k] or keys[K_SPACE] # or btn_a
+        Input.secondary = keys[K_l] or keys[K_e] or keys[K_SLASH] or keys[K_KP_PLUS] # or btn_b
+        Input.x = keys[K_j] # or btn_x
         Input.y = keys[K_i] # or btn_y
         Input.start = keys[K_RETURN] or keys[K_KP_ENTER] # or btn_start
         Input.select = keys[K_TAB] # or btn_select
         Input.escape = keys[K_ESCAPE]
         Input.reset = keys[K_r]
-        Input.any_button = any([Input.jump, Input.secondary, Input.start, Input.select, Input.escape, Input.reset])
+        Input.any_button = any([Input.primary, Input.secondary, Input.start, Input.select, Input.escape, Input.reset])
         Input.any_direction = any([Input.left, Input.right, Input.up, Input.down])
     
     @staticmethod
@@ -266,8 +265,8 @@ class Settings(SettingsBase):
         "reduce_motion": "Reduce motion",
         "enable_transparency": "Enable transparency",
         "enable_shaders": "Enable shaders",
-        "mute_sounds": "Mute sounds",
-        "mute_music": "Mute music",
+        "volume_music": "Music volume",
+        "volume_sfx": "SFX volume",
         "show_hitboxes": "Show hitboxes",
     }
     all = [
@@ -281,8 +280,8 @@ class Settings(SettingsBase):
         "reduce_motion",
         "enable_transparency",
         "enable_shaders",
-        "mute_sounds",
-        "mute_music",
+        "volume_music",
+        "volume_sfx",
         "show_hitboxes",
     ]
 
@@ -296,8 +295,8 @@ class Settings(SettingsBase):
     reduce_motion = False
     enable_transparency = True
     enable_shaders = False
-    mute_sounds = False
-    mute_music = False
+    volume_music = 0.2
+    volume_sfx = 0.2
     show_hitboxes = False
     last_preset = None
 
@@ -433,10 +432,10 @@ class Assets(object):
     @staticmethod
     def init():
         asset_dir = Assets.asset_dir
-        Assets.asset_dir = os.getcwd()
+        Assets.set_dir("assets")
         Assets.debug_font = pygame.font.SysFont("Helvetica", 13)
         Assets.status_font = pygame.font.SysFont("Helvetica", 14, bold=True)
-        Assets.status_icons = Assets.load_spritesheet("assets/status_icons.png", (9, 9), (18, 18))
+        Assets.status_icons = Assets.load_spritesheet("status_icons.png", (9, 9), (18, 18))
         Assets.asset_dir = asset_dir
 
     @staticmethod

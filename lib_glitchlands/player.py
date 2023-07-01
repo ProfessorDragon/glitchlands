@@ -1,5 +1,4 @@
 import math, random, copy
-
 import pygame
 
 from lib import*
@@ -290,7 +289,7 @@ class Player(pygame.sprite.Sprite):
                 if self.facing_right:
                     self.facing_right = False
                     self.anim_frame = 0
-            if (Input.jump or Input.up) and self.abilities.jump:
+            if (Input.primary or Input.up) and self.abilities.jump:
                 self.jump_buffer += 1
                 if (self.fall_frame < self.physics.coyote_ticks and self.jump_count == 0) or \
                     (self.fall_frame >= self.physics.coyote_ticks and self.jump_count > 0):

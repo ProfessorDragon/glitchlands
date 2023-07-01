@@ -249,7 +249,7 @@ class FullscreenOverlay:
             pos = (random.randint(-self.shake*2, 0), random.randint(-self.shake*2, 0))
         else:
             pos = (0, 0)
-        return self.gc.screen.blit(self.image, pos)
+        return self.gc.screen_out.blit(self.image, pos)
 
 
 class Checkpoint:
@@ -307,8 +307,10 @@ class Selection:
         self.prev_menu = 0
         self.scrollable = False
         self.button_pressed = False
+        self.mouse_pressed = False
         self.using_mouse = True
         self.direction_time = 0
+        self.direction_delay = 0
 
     def __repr__(self):
         return f"<Selection(idx={self.idx}, max={self.max}, menu={self.menu}, submenu={self.submenu})>"
@@ -424,8 +426,9 @@ class MusicManager:
 
     def play_queued(self, sync=True):
         def thread():
+            if Settings.volume_music == 0: return
             pygame.mixer.music.load(Assets.get(f"music/{self.name}.mp3"))
-            pygame.mixer.music.set_volume(MUSIC_VOLUME)
+            pygame.mixer.music.set_volume(Settings.volume_music)
             self.play()
         if sync: thread()
         else: threading.Thread(target=thread).start()
