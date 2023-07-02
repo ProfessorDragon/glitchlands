@@ -1,4 +1,4 @@
-import math, os, time, json, platform
+import math, os, time, json, threading, platform
 
 import pygame
 from pygame.locals import*
@@ -301,6 +301,92 @@ class Settings(SettingsBase):
     last_preset = None
 
 
+## MUSIC ##
+
+class MusicManager:
+    name = None
+    loop_data = None
+    loop_num = 0
+    loop_start = 0
+    loop_end = None
+    crossfade_finish = None
+    fade_time = 0.3
+    
+    @staticmethod
+    def load_loop_data(fn):
+        with open(fn) as f:
+            MusicManager.loop_data = json.load(f)
+
+    @staticmethod
+    def play(start=0):
+        if PYGAME_2: pygame.mixer.music.play(0, start, int(MusicManager.fade_time*1000))
+        else: pygame.mixer.music.play(0, start)
+
+    @staticmethod
+    def play_queued(sync=True):
+        def thread():
+            if Settings.volume_music == 0: return
+            pygame.mixer.music.load(MusicManager.name)
+            pygame.mixer.music.set_volume(Settings.volume_music)
+            MusicManager.play()
+        if sync: thread()
+        else: threading.Thread(target=thread).start()
+
+    @staticmethod
+    def fade_out():
+        pygame.mixer.music.fadeout(int(MusicManager.fade_time*1000))
+    
+    @staticmethod
+    def set_volume(volume):
+        pygame.mixer.music.set_volume(volume)
+
+    @staticmethod
+    def load(name):
+        if name is not None and not os.path.isfile(name): # prevent file not found error
+            name = None
+        if name == MusicManager.name:
+            return
+        if name is None:
+            MusicManager.stop()
+            return
+        if MusicManager.loop_data is not None and name in MusicManager.loop_data:
+            MusicManager.loop_start, MusicManager.loop_end = MusicManager.loop_data[name]
+        else:
+            MusicManager.loop_start, MusicManager.loop_end = 0, None
+        if MusicManager.name is None or MusicManager.crossfade_finish is not None or \
+            pygame.mixer.music.get_pos() <= MusicManager.fade_time:
+            MusicManager.name = name
+            MusicManager.play_queued(sync=True)
+        else:
+            MusicManager.crossfade_finish = time.perf_counter()+MusicManager.fade_time
+            MusicManager.fade_out()
+        MusicManager.name = name
+        MusicManager.loop_num = 0
+
+    @staticmethod
+    def stop():
+        if PYGAME_2: pygame.mixer.music.unload()
+        else: pygame.mixer.music.stop()
+        MusicManager.name = None
+        MusicManager.loop_num = 0
+        MusicManager.loop_start, MusicManager.loop_end = 0, None
+
+    @staticmethod
+    def update():
+        if MusicManager.crossfade_finish is not None:
+            if time.perf_counter() >= MusicManager.crossfade_finish:
+                MusicManager.play_queued(sync=False)
+                MusicManager.crossfade_finish = None
+        elif MusicManager.loop_end is not None:
+            elapsed = pygame.mixer.music.get_pos()
+            if MusicManager.loop_num > 0: target = (MusicManager.loop_end-MusicManager.loop_start)*1000
+            else: target = MusicManager.loop_end*1000
+            if elapsed >= target+MusicManager.fade_time:
+                MusicManager.play(MusicManager.loop_start)
+            elif elapsed >= target:
+                MusicManager.fade_out()
+
+
 ## ASSETS ##
 
 class Spritesheet:
@@ -424,7 +510,7 @@ class Collection:
 
 
 class Assets(object):
-    asset_dir = os.getcwd()+os.pathsep
+    asset_dir = os.getcwd()+os.sep
     debug_font = None
     status_font = None
     status_icons = None

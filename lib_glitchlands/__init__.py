@@ -1,4 +1,4 @@
-import math, random, threading
+import math, random
 import pygame
 from lib import*
 
@@ -409,67 +409,3 @@ class GlobalSave(SettingsBase):
     def update_extras(cls):
         cls.unlock_master = len(GlobalSave.completed_difficulties) > 0
         cls.unlock_skip = len(GlobalSave.completed_difficulties) > 0
-
-
-class MusicManager:
-    def __init__(self):
-        self.name = None
-        self.loop_num = 0
-        self.loop_start = 0
-        self.loop_end = None
-        self.crossfade_finish = None
-        self.fade_time = 0.3
-
-    def play(self, start=0):
-        if PYGAME_2: pygame.mixer.music.play(0, start, int(self.fade_time*1000))
-        else: pygame.mixer.music.play(0, start)
-
-    def play_queued(self, sync=True):
-        def thread():
-            if Settings.volume_music == 0: return
-            pygame.mixer.music.load(Assets.get(f"music/{self.name}.mp3"))
-            pygame.mixer.music.set_volume(Settings.volume_music)
-            self.play()
-        if sync: thread()
-        else: threading.Thread(target=thread).start()
-
-    def fade_out(self):
-        pygame.mixer.music.fadeout(int(self.fade_time*1000))
-
-    def load(self, name):
-        if name == self.name: return
-        if name is None:
-            self.stop()
-            return
-        with open(Assets.get("music/loop.json")) as f:
-            loop = json.load(f)
-        self.loop_start, self.loop_end = loop.get(name, [0, None])
-        if self.name is None or self.crossfade_finish is not None or pygame.mixer.music.get_pos() <= self.fade_time:
-            self.name = name
-            self.play_queued(sync=True)
-        else:
-            self.crossfade_finish = time.perf_counter()+self.fade_time
-            self.fade_out()
-        self.name = name
-        self.loop_num = 0
-
-    def stop(self):
-        if PYGAME_2: pygame.mixer.music.unload()
-        else: pygame.mixer.music.stop()
-        self.name = None
-        self.loop_num = 0
-        self.loop_start, self.loop_end = 0, None
-
-    def update(self):
-        if self.crossfade_finish is not None:
-            if time.perf_counter() >= self.crossfade_finish:
-                self.play_queued(sync=False)
-                self.crossfade_finish = None
-        elif self.loop_end is not None:
-            elapsed = pygame.mixer.music.get_pos()
-            if self.loop_num > 0: target = (self.loop_end-self.loop_start)*1000
-            else: target = self.loop_end*1000
-            if elapsed >= target+self.fade_time:
-                self.play(self.loop_start)
-            elif elapsed >= target:
-                self.fade_out()

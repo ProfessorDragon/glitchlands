@@ -266,6 +266,7 @@ class GameController:
             release=self.handle_touch_event,
             move=self.handle_touch_event
         )
+        MusicManager.load_loop_data(Assets.get("music/loop.json"))
 
         self.assets.load()
         self.background = Background(self, random.randint(0, 6))
@@ -281,7 +282,6 @@ class GameController:
         self.glitch_chance = -1
         self.difficulty = 1
         self.transition = None
-        self.music = MusicManager()
         self.set_menu(MENU_MAIN)
     
     def save_progress(self):
@@ -399,7 +399,7 @@ class GameController:
     
     def load_music(self, name=None):
         if Settings.volume_music == 0:
-            self.music.load(None)
+            MusicManager.load(None)
             return
         if name is None: # no name specified, auto-detect
             if self.level is not None:
@@ -408,9 +408,7 @@ class GameController:
                 name = "menu"
         elif name == "none":
             name = None
-        if name is not None and not os.path.isfile(Assets.get(f"music/{name}.mp3")): # prevent file not found error
-            name = None
-        self.music.load(name)
+        MusicManager.load(Assets.get(f"music/{name}.mp3"))
 
     def play_sound(self, name, volume=1):
         if Settings.volume_sfx == 0: return
@@ -441,9 +439,9 @@ class GameController:
         self.force_full_refresh = True
     
     def adjust_music_volume(self, prev, cur):
-        if cur == 0: self.music.stop()
+        if cur == 0: MusicManager.stop()
         elif prev == 0: self.load_music()
-        else: pygame.mixer.music.set_volume(cur)
+        else: MusicManager.set_volume(cur)
 
     def set_menu(self, menu, submenu=0, idx=(0, 0)):
         self.ui_objects = []
@@ -666,6 +664,7 @@ class GameController:
         sel = self.selection
         if sel.idx is None and not sel.scrollable:
             return
+        button = None
         for button in self.ui_objects:
             if isinstance(button, ui.Button) and sel.idx in button.indexes:
                 break
@@ -730,7 +729,8 @@ class GameController:
                 if attr == "reduce_motion": Settings.set("fullscreen_refresh", not enabled)
                 if attr in ("windowed", "vsync"): self.init_display()
                 Settings.save()
-                button.update_frames(self.assets.ui.get("switch")[1 if enabled else 2])
+                if button is not None:
+                    button.update_frames(self.assets.ui.get("switch")[1 if enabled else 2])
         elif sel.menu == MENU_CREDITS:
             if sel.submenu == SUBMENU_SKIP_CREDITS and (Input.start or Input.escape):
                 self.in_game = False
@@ -917,6 +917,7 @@ class GameController:
             if Input.any_direction:
                 if perf-self.selection.direction_time > self.selection.direction_delay and not self.selection.scrollable:
                     prev = self.selection.idx[:]
+                    button = None
                     for button in self.ui_objects:
                         if isinstance(button, ui.Button) and self.selection.idx in button.indexes:
                             break
@@ -939,7 +940,7 @@ class GameController:
                 self.selection.direction_delay = 0
         if self.transition is not None:
             self.transition.update()
-        self.music.update()
+        MusicManager.update()
 
     def draw(self):
         # welcome to my very epic, complicated, and definitely optimized draw code
