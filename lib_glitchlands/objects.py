@@ -84,6 +84,7 @@ class Object(pygame.sprite.Sprite):
         self.rect = pygame.Rect(self.x, self.y, self.tilew, self.tileh)
         self.hitbox = None
         self.collides = COLLISION_NONE
+        self.collide_sound = None # currently only used for blocks when they are stepped on or hit from below
         self.loaded = False
         self.self_destruct = False
     def update_hitbox(self):
@@ -164,13 +165,22 @@ class Block(Object):
                     self.anim_duration = self.frames.width
             else:
                 self.image = self.gc.assets.terrain[-self.type][self.style][self.num]
-            self.image = Assets.tile_surface_repetition(self.image, self.xrep, self.yrep, alpha=self.type <= -2)
-            self.frames = [Assets.tile_surface_repetition(frame, self.xrep, self.yrep, alpha=self.type <= -2) for frame in self.frames]
+                self.collide_sound = "step_rock"
+                if self.type == OBJTYPE_BLOCK:
+                    if self.style in (0, 1, 2, 5): self.collide_sound = "step_grass"
+                    elif self.style == 4: self.collide_sound = "step_wood"
+                elif self.type == OBJTYPE_SEMISOLID:
+                    if self.style == 0: self.collide_sound = "step_wood"
+            self.image = Assets.tile_surface_repetition(self.image, self.xrep, self.yrep, alpha=self.type <= OBJTYPE_SEMISOLID)
+            self.frames = [Assets.tile_surface_repetition(frame, self.xrep, self.yrep, alpha=self.type <= OBJTYPE_SEMISOLID) \
+                           for frame in self.frames]
             self.rect = pygame.Rect(self.x, self.y, self.image.get_width(), self.image.get_height())
             self.generate_glitch_image()
-        else:
+        else: # invisible block
             self.image = None
             self.rect = pygame.Rect(self.x, self.y, self.tilew*self.xrep, self.tileh*self.yrep)
+        if config.get("collide_sound") is not None:
+            self.collide_sound = config["collide_sound"]
         self.update_hitbox()
     def update_hitbox(self):
         self.hitbox = self.rect.copy()
@@ -492,7 +502,8 @@ class FireTrap(Object):
                     "x": self.x,
                     "y": self.y+(0 if self.upside_down else self.tileh),
                     "num": 0,
-                    "style": -1
+                    "style": -1,
+                    "collide_sound": "step_rock"
                 })
             )
     def update_hitbox(self):
@@ -609,9 +620,13 @@ class GlitchZone(Object):
         self.physics = None
         if self.unlocked and (self.appear_delay is None or self.anim_frame > self.appear_delay):
             self.collides = COLLISION_PASS
-            if self.num == 0: self.collides = COLLISION_BLOCK
-            elif self.num == 1: self.warp = self.config.get("warp", None)
-            elif self.num == 2: self.physics = self.config.get("physics", {})
+            if self.num == 0:
+                self.collides = COLLISION_BLOCK
+                self.collide_sound = "step_glass"
+            elif self.num == 1:
+                self.warp = self.config.get("warp", None)
+            elif self.num == 2:
+                self.physics = self.config.get("physics", {})
     def transparent_rect(self, width, height, opacity):
         im = Assets.sized_surface(width, height)
         im.fill(self.color)
@@ -692,6 +707,7 @@ class FallingPlatform(Object):
         self.rect = pygame.Rect(self.x, self.y, self.frames[0].get_width(), self.frames[0].get_height())
         self.update_hitbox()
         self.collides = COLLISION_BLOCK
+        self.collide_sound = "step_rock"
         self.anim = "idle"
         self.anim_delay = 2
         self.prev_anim_frame = self.anim_frame
@@ -953,6 +969,7 @@ class CrystalBarrier(Object):
         self.rect = pygame.Rect(self.x, self.y, self.frames[0].get_width(), self.frames[0].get_height())
         self.update_hitbox()
         self.collides = COLLISION_BLOCK
+        self.collide_sound = "step_rock"
         self.anim_delay = 8
         self.locked = None
     def update_hitbox(self):
@@ -1000,6 +1017,7 @@ class OneWayGate(Activateable):
         self.frames = self.gc.assets.objects.get("one_way_gate")
         self.rect = pygame.Rect(self.x, self.y, self.frames[0].get_width(), self.frames[0].get_height())
         self.update_hitbox()
+        self.collide_sound = "step_rock"
         self.anim_delay = 2
         if self.level.level_pos in self.gc.visited_one_ways:
             self.activate()
@@ -1423,6 +1441,7 @@ class ShieldPedestal(Object):
         self.anim = 2 if self.gc.difficulty > 1 else 0
         self.update_hitbox()
         self.collides = COLLISION_BLOCK
+        self.collide_sound = "step_glass"
         self.anim_delay = 3
     def update_hitbox(self):
         if self.anim == 0: self.hitbox = pygame.Rect(self.rect.x+2, self.rect.y+12, self.rect.w-4, self.rect.h-12)
@@ -1626,6 +1645,7 @@ class VirusBoss(Object):
             self.facing_right = False
             self.x = self.gc.game_width//2
             self.y = (self.gc.game_height-self.tileh)//2
+            self.gc.play_sound("virus_scream")
         elif attack == self.ATTACK_TOMBSTONE:
             self.gc.push_object(
                 Tombstone(self.gc, self.level, {
@@ -1911,7 +1931,7 @@ class VirusBoss(Object):
                     {"num": 4, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": 7*self.tileh, "xrep": 2},
                     {"num": 9, "type": OBJTYPE_BLOCK, "x": 3*self.tilew, "y": 7*self.tileh},
                     {"num": 8, "type": OBJTYPE_BLOCK, "x": 4*self.tilew, "y": 7*self.tileh},
-                    {"num": 1, "type": OBJTYPE_SPIKE, "x": 5*self.tilew, "y": 7*self.tileh},
+                    {"num": 1, "type": OBJTYPE_SPIKE, "x": 5*self.tilew, "y": 7*self.tileh, "xrep": 1 if diff > 0 else 0},
                     {"num": 6, "type": OBJTYPE_BLOCK, "x": 0, "y": 8*self.tileh},
                     {"num": 10, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": 8*self.tileh},
                     {"num": 4, "type": OBJTYPE_BLOCK, "x": 2*self.tilew, "y": 8*self.tileh, "yrep": 2},
@@ -1944,7 +1964,7 @@ class VirusBoss(Object):
                     {"num": 0, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": 6*self.tileh},
                     {"num": 12, "type": OBJTYPE_BLOCK, "x": 2*self.tilew, "y": 6*self.tileh},
                     {"num": 2, "type": OBJTYPE_SPIKE, "x": 9*self.tilew, "y": 6*self.tileh},
-                    {"num": 0, "type": OBJTYPE_SPIKE, "x": 0, "y": 7*self.tileh},
+                    {"num": 0 if diff > 1 else 2, "type": OBJTYPE_SPIKE, "x": 0 if diff > 1 else 2, "y": 7*self.tileh},
                     {"num": 3, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": 7*self.tileh, "yrep": 2},
                     {"num": 4, "type": OBJTYPE_BLOCK, "x": 2*self.tilew, "y": 7*self.tileh, "xrep": 6, "yrep": 2},
                     {"num": 11, "type": OBJTYPE_BLOCK, "x": 8*self.tilew, "y": 7*self.tileh},
@@ -2333,6 +2353,7 @@ class ArenaBarrier(Activateable):
         self.rect = pygame.Rect(self.x-self.tilew*1.5, self.y, self.tilew*3, self.tileh)
         self.update_hitbox()
         self.collides = COLLISION_BLOCK
+        self.collide_sound = "step_rock"
         self.position = 0
         self.auto_activated = False
         self.no_collide = False

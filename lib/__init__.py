@@ -1,4 +1,4 @@
-import math, os, time, json, threading, platform
+import sys, math, os, time, json, threading, platform
 
 import pygame
 from pygame.locals import*
@@ -24,8 +24,7 @@ UP = "up"
 DOWN = "down"
 
 PYGAME_2 = pygame.version.vernum.major == 2
-RASPBERRY_PI = platform.uname()[4].startswith("arm")
-USER_NAME = os.path.expandvars("$USER" if RASPBERRY_PI else "%username%")
+RASPBERRY_PI = platform.machine() == "armv7l"
 
 if RASPBERRY_PI:
     import warnings
@@ -60,7 +59,7 @@ class Input(object):
             else:
                 Input._gpio = GPIO
                 GPIO.setmode(GPIO.BCM)
-                GPIO.setup(26, GPIO.IN, pull_up_down=GPIO.PUD_UP) # stick
+                #GPIO.setup(26, GPIO.IN, pull_up_down=GPIO.PUD_UP) # stick
             try:
                 import busio, digitalio, board
                 import adafruit_mcp3xxx.mcp3008 as MCP
@@ -125,7 +124,7 @@ class Input(object):
         Input.right = keys[K_RIGHT] or keys[K_d] or keys[K_KP6] or jx > Input.joystick_threshold
         Input.up = keys[K_UP] or keys[K_w] or keys[K_KP8] or jy < -Input.joystick_threshold
         Input.down = keys[K_DOWN] or keys[K_s] or keys[K_KP2] or jy > Input.joystick_threshold
-        Input.stick = Input._gpio is not None and not Input._gpio.input(26)
+        Input.stick = False # Input._gpio is not None and not Input._gpio.input(26)
         Input.primary = keys[K_k] or keys[K_SPACE] # or btn_a
         Input.secondary = keys[K_l] or keys[K_e] or keys[K_SLASH] or keys[K_KP_PLUS] # or btn_b
         Input.x = keys[K_j] # or btn_x
@@ -295,8 +294,8 @@ class Settings(SettingsBase):
     reduce_motion = False
     enable_transparency = True
     enable_shaders = False
-    volume_music = 0.2
-    volume_sfx = 0.2
+    volume_music = 1 if RASPBERRY_PI else 0.2
+    volume_sfx = 1 if RASPBERRY_PI else 0.2
     show_hitboxes = False
     last_preset = None
 
@@ -326,6 +325,8 @@ class MusicManager:
     def play_queued(sync=True):
         def thread():
             if Settings.volume_music == 0: return
+            while pygame.mixer.get_init() is None:
+                time.sleep(0.5)
             pygame.mixer.music.load(MusicManager.name)
             pygame.mixer.music.set_volume(Settings.volume_music)
             MusicManager.play()
@@ -349,8 +350,9 @@ class MusicManager:
         if name is None:
             MusicManager.stop()
             return
-        if MusicManager.loop_data is not None and name in MusicManager.loop_data:
-            MusicManager.loop_start, MusicManager.loop_end = MusicManager.loop_data[name]
+        stripped = os.path.splitext(os.path.basename(name))[0]
+        if MusicManager.loop_data is not None and stripped in MusicManager.loop_data:
+            MusicManager.loop_start, MusicManager.loop_end = MusicManager.loop_data[stripped]
         else:
             MusicManager.loop_start, MusicManager.loop_end = 0, None
         if MusicManager.name is None or MusicManager.crossfade_finish is not None or \

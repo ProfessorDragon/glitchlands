@@ -128,6 +128,7 @@ class Player(pygame.sprite.Sprite):
         self.attack_cooldown = 0
         self.attack_pressed = False
         self.hurt_timer = 0
+        self.step_timer = 0
     
     def death(self):
         self.freeze_timer = 15
@@ -411,6 +412,8 @@ class Player(pygame.sprite.Sprite):
                 elif dx > 0: self.collide_right(obj.hitbox.left)
 
     def update_vertical_collisions(self, dy):
+        if self.fall_frame > 0: self.step_timer = 0
+        elif self.step_timer > 0: self.step_timer -= 1
         self.fall_frame += 1
         self.update_hitbox()
         
@@ -421,11 +424,13 @@ class Player(pygame.sprite.Sprite):
             self.gc.warp_bottom()
             self.update_hitbox()
         
+        blocks = [obj for obj in self.gc.objects_collide if obj.collides == COLLISION_BLOCK and \
+                  obj.collide_sound is not None and obj.collides_vertical(self, dy)]
+        
         land = False
         for obj in self.gc.objects_collide:
             if not obj.collides_vertical(self, dy): continue
             if obj.collides == COLLISION_HAZARD:
-                # if self.health <= 1 and self.hurt_timer == 0:
                 if dy < 0: self.collide_top(obj.hitbox.bottom)
                 elif dy > 0: self.collide_bottom(obj.hitbox.top)
                 self.death()
@@ -439,8 +444,19 @@ class Player(pygame.sprite.Sprite):
                 if (not self.upside_down and dy > self.physics.gravity*8) or \
                     (self.upside_down and dy < self.physics.gravity*8):
                     land = True
+        
+        if self.step_timer == 0 and len(blocks) > 0 and (
+                land or \
+                self.xv != 0 or \
+                (not self.upside_down and dy < 0) or \
+                (self.upside_down and dy > 0)
+            ):
+            if self.facing_right: step = max(blocks, key=lambda obj: obj.hitbox.left)
+            else: step = min(blocks, key=lambda obj: obj.hitbox.right)
+            self.gc.play_sound(step.collide_sound)
+            self.step_timer = 6*(3 if self.abilities.speed_boost else 4)
+
         if land:
-            self.gc.play_sound("land")
             self.spawn_particles_land()
         if self.fall_frame >= self.physics.coyote_ticks:
             self.jump_count = max(self.jump_count, 1)
@@ -466,18 +482,22 @@ class Player(pygame.sprite.Sprite):
                 if self.yv > self.physics.gravity*2: self.anim = "fall"
                 elif self.yv < -self.physics.gravity*2 or self.fall_frame > 4:
                     self.anim = "double_jump" if self.jump_count > 1 else "jump"
+                    self.anim_delay = 3
             else:
                 if self.yv < self.physics.gravity*2: self.anim = "fall"
                 elif self.yv > -self.physics.gravity*2 or self.fall_frame > 4:
                     self.anim = "double_jump" if self.jump_count > 1 else "jump"
+                    self.anim_delay = 3
             if self.anim is None:
                 if self.xv != 0:
-                    if self.abilities.speed_boost: self.anim_delay = 3
                     self.anim = "walk"
+                    if self.abilities.speed_boost:
+                        self.anim_delay = 3
                 elif Input.down:
                     self.anim = "crouch"
                     self.anim_frame = 0
-                else: self.anim = "idle"
+                else:
+                    self.anim = "idle"
         else:
             self.freeze_timer -= 1
             if self.anim == "death":

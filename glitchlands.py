@@ -7,7 +7,7 @@ from lib_glitchlands import*
 from lib_glitchlands import player, objects, ui, particles
 
 import pygame
-pygame.mixer.pre_init(44100, 8 if RASPBERRY_PI else -16, 2, 512)
+pygame.mixer.pre_init(44100, -16, 2, 512)
 pygame.init()
 try: from PygameShader import shader
 except ImportError: shader = None
@@ -32,7 +32,7 @@ class AssetLoader:
 
         self.ui = Collection()
         self.ui.add("menu_buttons", Assets.load_spritesheet("ui/menu_buttons.png", (96, 16), (192, 32)))
-        self.ui.add("menu_buttons_small", Assets.load_spritesheet(f"ui/menu_buttons_small.png", (18, 14), (36, 28)))
+        self.ui.add("menu_buttons_small", Assets.load_spritesheet("ui/menu_buttons_small.png", (18, 14), (36, 28)))
         self.ui.add("menu_icons", Assets.load_spritesheet("ui/menu_icons.png", (9, 9), (18, 18)))
         self.ui.add("slot_buttons", Assets.load_spritesheet("ui/slot_buttons.png", (96, 64), (192, 128)))
         self.ui.add("switch", Assets.load_spritesheet("ui/switch.png", (64, 16), (128, 32)))
@@ -63,7 +63,7 @@ class AssetLoader:
         self.objects.add("fire_trap", Assets.load_spritesheet("objects/fire_trap.png", (16, 32), (32, 64), vflip=True))
         self.objects.add("saw_trap", Assets.load_spritesheet("objects/saw_trap.png", (38, 38), (76, 76), hflip=True))
         self.objects.add("crusher", Assets.load_spritesheet("objects/crusher.png", (64, 48), (128, 96)))
-        self.objects.add("falling_platform", Assets.load_spritesheet(f"objects/falling_platform.png", (32, 16), (64, 32)))
+        self.objects.add("falling_platform", Assets.load_spritesheet("objects/falling_platform.png", (32, 16), (64, 32)))
         self.objects.add("one_way_gate", Assets.load_spritesheet("objects/one_way_gate.png", (48, 48), (96, 96), hflip=True))
         self.objects.add("goo", Assets.load_image("objects/goo.png", (128, 128)))
         self.objects.add("npc", Assets.load_spritesheet("objects/npc.png", (32, 32), (64, 64), hflip=True))
@@ -247,7 +247,6 @@ class GameController:
         self.visited_final_world = False
         self.defeated_virus = False
         self.crystal_count = 0
-        self.glitch_chance = -1
         self.death_count = 0
         self.elapsed_time = 0
         self.disable_pause()
@@ -408,7 +407,7 @@ class GameController:
                 name = "menu"
         elif name == "none":
             name = None
-        MusicManager.load(Assets.get(f"music/{name}.mp3"))
+        MusicManager.load(Assets.get(f"music/{name}.ogg"))
 
     def play_sound(self, name, volume=1):
         if Settings.volume_sfx == 0: return
@@ -504,10 +503,10 @@ class GameController:
                 obj.rect.left = x
             x += 270
             ui.create_text(self, "Music", cx=x, cy=210)
-            ui.create_slider(self, "volume_music", 0.5, (0, len(self.shown_settings)), cx=x, cy=235,
+            ui.create_slider(self, "volume_music", 1 if RASPBERRY_PI else 0.5, (0, len(self.shown_settings)), cx=x, cy=235,
                              callback=self.adjust_music_volume)
             ui.create_text(self, "SFX", cx=x, cy=275)
-            ui.create_slider(self, "volume_sfx", 0.5, (0, len(self.shown_settings)+1), cx=x, cy=300)
+            ui.create_slider(self, "volume_sfx", 1 if RASPBERRY_PI else 0.5, (0, len(self.shown_settings)+1), cx=x, cy=300)
             ui.create_button(self, buttons[1], (0, len(self.shown_settings)+2), cx=x, cy=390)
             mx = [0, len(self.shown_settings)+3]
         elif menu in (MENU_CREDITS, MENU_COMPLETION):
@@ -722,7 +721,7 @@ class GameController:
             if sel.y == sel.ymax-1:
                 self.set_menu(sel.prev_menu)
                 sound = "return"
-            elif sel.y < len(self.shown_settings)-1:
+            elif sel.y < len(self.shown_settings):
                 attr = self.shown_settings[sel.y]
                 enabled = not Settings.get(attr)
                 Settings.set(attr, enabled)
@@ -766,8 +765,10 @@ class GameController:
     def handle_touch_event(self, event, touch):
         if event == ft5406.TS_MOVE: # touch down or move
             self.selection.disable_mouse()
+            self.selection.mouse_pressed = True
             self.update_cursor_selection(touch_pos=touch.position)
         elif event == ft5406.TS_RELEASE: # else touch up
+            self.selection.mouse_pressed = False
             self.launch_selection()
 
     def update_cursor_selection(self, touch_pos=None):
@@ -783,7 +784,8 @@ class GameController:
             x *= self.game_width/self.screen_width # scale to (game_width, game_height)
             y *= self.game_height/self.screen_height
         for button in self.ui_objects:
-            if isinstance(button, ui.Button) and len(button.indexes) > 0 and button.rect.inflate(4, 2).collidepoint(x, y):
+            if isinstance(button, ui.Button) and len(button.indexes) > 0 and \
+                button.rect.inflate(button.hit_inflate).collidepoint(x, y):
                 self.selection.set(button.indexes[0])
                 if isinstance(button, ui.Slider) and self.selection.mouse_pressed:
                     button.set_percent((x-button.rect.left-12)/(button.rect.width-24))
@@ -903,10 +905,11 @@ class GameController:
                             self.set_menu(self.selection.prev_menu)
                             self.play_sound("return")
                     else:
-                        if self.selection.menu == MENU_MAIN and Input.escape:
-                            self.running = False
-                            return
-                        if self.selection.menu in (MENU_CREDITS, MENU_COMPLETION):
+                        if self.selection.menu == MENU_MAIN:
+                            if Input.escape:
+                                self.running = False
+                                return
+                        elif self.selection.menu in (MENU_CREDITS, MENU_COMPLETION):
                             self.launch_selection()
                         else:
                             self.set_menu(self.selection.prev_menu)
@@ -1126,6 +1129,7 @@ class GameController:
         elif num == 4:
             self.transition = FullscreenOverlay(self, (0, 40, 20), color=(68, 68, 68),
                                 surface=self.assets.decoration.get("virus_transition"), shake=4)
+            self.play_sound("virus_scream")
         elif num == 5:
             self.transition = FullscreenOverlay(self, (10, 10, 10), color=WHITE)
         if level is not None:

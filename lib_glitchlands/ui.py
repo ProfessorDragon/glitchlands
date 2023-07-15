@@ -50,6 +50,7 @@ class Button(Graphic):
         if indexes is None: self.indexes = []
         elif type(indexes[0]) == tuple: self.indexes = indexes
         else: self.indexes = [indexes]
+        self.hit_inflate = (4, 2) # used for detecting cursor hovering
     def update_frames(self, frames):
         super().update_frames(frames)
         self.height += 2
@@ -77,6 +78,7 @@ class Slider(Button):
         self.callback = callback
         self.max = max_/(len(self.frames)-1)
         self.anim_frame = min(max(int(round(Settings.get(setting)/self.max)), 0), len(self.frames)-1)
+        self.hit_inflate = (8, 4)
     def set(self, frame):
         prev = round(self.anim_frame*self.max, 2)
         self.anim_frame = min(max(frame, 0), len(self.frames)-1)
