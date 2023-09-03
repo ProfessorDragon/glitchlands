@@ -3,7 +3,8 @@ import sys, math, os, time, json, threading, platform
 import pygame
 from pygame.locals import*
 
-from lib import ft5406
+from . import ft5406
+# from . import profilehooks
 
 
 ## CONSTANTS ##
@@ -25,6 +26,7 @@ DOWN = "down"
 
 PYGAME_2 = pygame.version.vernum.major == 2
 RASPBERRY_PI = platform.machine() == "armv7l"
+BASH = sys.platform != "win32"
 
 if RASPBERRY_PI:
     import warnings
@@ -35,70 +37,98 @@ if RASPBERRY_PI:
 
 class Input(object):
 
-    keys = ["left", "right", "up", "down", "stick", "jump", "secondary", "x", "y", "escape", "start", "select", "reset", "any_button", "any_direction"]
-    left, right, up, down, stick, jump, secondary, x, y, escape, start, select, reset, any_button, any_direction = [False for _ in range(len(keys))]
+    keys = ["left", "right", "up", "down", "stick_button", "primary", "secondary", "x", "y", "l", "r", "l2", "r2", "escape", "start", "select", "reset", "any_button", "any_direction"]
+    left, right, up, down, stick_button, primary, secondary, x, y, l, r, l2, r2, escape, start, select, reset, any_button, any_direction = [False for _ in range(len(keys))]
+    button_bcm_map = {"primary": 17, "secondary": 22, "x": 4, "y": 27, "l": 19, "r": 24, "l2": 26, "r2": 23, "start": 25, "select": 21, "stick_button": 20}
+    button_instances = {}
+    stick_position = (0, 0)
+    stick_amount = 0
+    stick_angle = 0
     mouse_visible = True
-    joystick_center = (32736, 32736)
-    joystick_threshold = 8000
+    joystick_radius = 0.5
+    joystick_threshold = 0.15
     battery_percent = None
     battery_charging = None
     cpu_temp = None
+    memory_usage = None
     last_hardware_update = 0
-    _mcp = None # mcp.mcp3008 instance (for analogue input)
     _ts = None # ft5406 instance (for touchscreen)
-    _gpio = None # rpi.gpio module
+    _mcp = None # gpiozero.mcp3008 instance (for joystick)
     _bus = None # smbus.smbus instance (for i2c)
+    _embpi = None # pyembedded.raspberry_pi_tools.raspberrypi.PI instance (for usage stats)
+    _psutil = None # psutil module (substitute for other modules on windows)
 
     @staticmethod
-    def init():
+    def init(input_devices=True, hardware_devices=True):
         if RASPBERRY_PI:
-            try:
-                import RPi.GPIO as GPIO
-            except ImportError:
-                print("Failed to load GPIO")
-            else:
-                Input._gpio = GPIO
-                GPIO.setmode(GPIO.BCM)
-                #GPIO.setup(26, GPIO.IN, pull_up_down=GPIO.PUD_UP) # stick
-            try:
-                import busio, digitalio, board
-                import adafruit_mcp3xxx.mcp3008 as MCP
-                from adafruit_mcp3xxx.analog_in import AnalogIn
-            except ImportError:
-                print("Failed to load SPI")
-            else:
-                spi = busio.SPI(clock=board.SCK, MISO=board.MISO, MOSI=board.MOSI)
-                cs = digitalio.DigitalInOut(board.D5)
-                Input._mcp = MCP.MCP3008(spi, cs)
-                Input.joystick_x = AnalogIn(Input._mcp, MCP.P0)
-                Input.joystick_y = AnalogIn(Input._mcp, MCP.P1)
-                Input.joystick_button = AnalogIn(Input._mcp, MCP.P2)
-                time.sleep(0.5)
-                Input.joystick_center = Input.joystick_x.value, Input.joystick_y.value
-            try:
-                import smbus
-            except ImportError:
-                print("Failed to load I2C")
-            else:
-                Input._bus = smbus.SMBus(1)
-            try:
-                Input._ts = ft5406.Touchscreen(device="raspberrypi-ts")
-            except RuntimeError:
-                print("Failed to locate touchscreen")
-            else:
-                Input._ts.run()
+            if input_devices:
+                try:
+                    from gpiozero import Button, MCP3008
+                except ImportError:
+                    print("Failed to load SPI")
+                else:
+                    for k, v in Input.button_bcm_map.items():
+                        Input.button_instances[k] = Button(v)
+                    Input._mcp = MCP3008
+                    Input.joystick_x = MCP3008(0)
+                    Input.joystick_y = MCP3008(1)
+                try:
+                    Input._ts = ft5406.Touchscreen(device="raspberrypi-ts")
+                except RuntimeError:
+                    print("Failed to locate touchscreen")
+                else:
+                    Input._ts.run()
+            if hardware_devices:
+                try:
+                    import smbus
+                except ImportError:
+                    print("Failed to load I2C")
+                else:
+                    Input._bus = smbus.SMBus(1)
+                try:
+                    from pyembedded.raspberry_pi_tools.raspberrypi import PI
+                except ImportError:
+                    print("Memory usage unavailable")
+                else:
+                    Input._embpi = PI()
+        else:
+            if hardware_devices:
+                try:
+                    import psutil
+                except ImportError:
+                    print("Memory usage unavailable")
+                else:
+                    Input._psutil = psutil
 
     @staticmethod
     def stop():
+        Input.stop_gpio()
         if Input._ts is not None:
             Input._ts.stop()
-        if Input._gpio is not None:
-            Input._gpio.cleanup()
+    
+    @staticmethod
+    def stop_gpio():
+        for device in Input.button_instances.values():
+            device.close()
 
     @staticmethod
     def get_joystick():
         if Input._mcp is None: return (0, 0)
-        return -(Input.joystick_x.value-Input.joystick_center[0]), -(Input.joystick_y.value-Input.joystick_center[1])
+        jx = Input.joystick_y.value-Settings.joystick_calibration[4]
+        jy = Input.joystick_x.value-Settings.joystick_calibration[1]
+        if jx < 0:
+            if Settings.joystick_calibration[3] == Settings.joystick_calibration[4]: jx = 0
+            else: jx *= Input.joystick_radius/(Settings.joystick_calibration[4]-Settings.joystick_calibration[3])
+        elif jx > 0:
+            if Settings.joystick_calibration[5] == Settings.joystick_calibration[4]: jx = 0
+            else: jx *= Input.joystick_radius/(Settings.joystick_calibration[5]-Settings.joystick_calibration[4])
+        if jy < 0:
+            if Settings.joystick_calibration[0] == Settings.joystick_calibration[1]: jy = 0
+            else: jy *= Input.joystick_radius/(Settings.joystick_calibration[1]-Settings.joystick_calibration[0])
+        elif jy > 0:
+            if Settings.joystick_calibration[2] == Settings.joystick_calibration[1]: jy = 0
+            else: jy *= Input.joystick_radius/(Settings.joystick_calibration[2]-Settings.joystick_calibration[1])
+        return jx, jy
     
     @staticmethod
     def set_touch_handlers(press=None, release=None, move=None):
@@ -119,34 +149,77 @@ class Input(object):
 
     @staticmethod
     def update(keys):
-        jx, jy = Input.get_joystick()
-        Input.left = keys[K_LEFT] or keys[K_a] or keys[K_KP4] or jx < -Input.joystick_threshold
-        Input.right = keys[K_RIGHT] or keys[K_d] or keys[K_KP6] or jx > Input.joystick_threshold
-        Input.up = keys[K_UP] or keys[K_w] or keys[K_KP8] or jy < -Input.joystick_threshold
-        Input.down = keys[K_DOWN] or keys[K_s] or keys[K_KP2] or jy > Input.joystick_threshold
-        Input.stick = False # Input._gpio is not None and not Input._gpio.input(26)
-        Input.primary = keys[K_k] or keys[K_SPACE] # or btn_a
-        Input.secondary = keys[K_l] or keys[K_e] or keys[K_SLASH] or keys[K_KP_PLUS] # or btn_b
-        Input.x = keys[K_j] # or btn_x
-        Input.y = keys[K_i] # or btn_y
-        Input.start = keys[K_RETURN] or keys[K_KP_ENTER] # or btn_start
-        Input.select = keys[K_TAB] # or btn_select
+        Input.left = keys[K_LEFT] or keys[K_a] or keys[K_KP4]
+        Input.right = keys[K_RIGHT] or keys[K_d] or keys[K_KP6]
+        Input.up = keys[K_UP] or keys[K_w] or keys[K_KP8]
+        Input.down = keys[K_DOWN] or keys[K_s] or keys[K_KP2]
+        Input.stick_button = keys[K_BACKSLASH]
+        Input.primary = keys[K_k] or keys[K_SPACE]
+        Input.secondary = keys[K_l] or keys[K_e] or keys[K_SLASH] or keys[K_KP_PLUS]
+        Input.x = keys[K_j]
+        Input.y = keys[K_i]
+        Input.l = keys[K_u]
+        Input.r = keys[K_o]
+        Input.l2 = False
+        Input.r2 = False
+        Input.start = keys[K_RETURN] or keys[K_KP_ENTER]
+        Input.select = keys[K_TAB]
         Input.escape = keys[K_ESCAPE]
         Input.reset = keys[K_r]
-        Input.any_button = any([Input.primary, Input.secondary, Input.start, Input.select, Input.escape, Input.reset])
+        for name, device in Input.button_instances.items():
+            if not getattr(Input, name):
+                setattr(Input, name, device.is_pressed)
+        if RASPBERRY_PI:
+            jx, jy = Input.get_joystick()
+            Input.stick_position = (jx, jy)
+            Input.stick_amount = math.sqrt(jx*jx+jy*jy)
+            Input.stick_angle = math.degrees(math.atan2(jy, jx))
+            if Input.stick_angle < 0: Input.stick_angle += 360
+            if Input.stick_amount > Input.joystick_threshold:
+                overlap = 60
+                if not Input.right and (Input.stick_angle < overlap or Input.stick_angle > 360-overlap): Input.right = True
+                if not Input.up and 90-overlap < Input.stick_angle < 90+overlap: Input.up = True
+                if not Input.left and 180-overlap < Input.stick_angle < 180+overlap: Input.left = True
+                if not Input.down and 270-overlap < Input.stick_angle < 270+overlap: Input.down = True
+        else:
+            jx, jy = Input.right-Input.left, Input.up-Input.down
+            Input.stick_position = (jx*Input.joystick_radius, jy*Input.joystick_radius)
+            Input.stick_amount = Input.joystick_radius if jx != 0 or jy != 0 else 0
+            Input.stick_angle = math.degrees(math.atan2(jy, jx))
+        Input.any_button = any([
+            Input.primary, Input.secondary, Input.start, Input.x, Input.y,
+            Input.select, Input.escape, Input.reset
+        ])
         Input.any_direction = any([Input.left, Input.right, Input.up, Input.down])
+
+    @staticmethod
+    def rate_limit(new, old, limit):
+        if old is None or limit is None or limit < 0: return new
+        return min(max(new, old-limit), old+limit)
     
     @staticmethod
-    def update_hardware(force=False):
-        if not force and time.perf_counter()-Input.last_hardware_update < 0.5:
-            return False
+    def update_hardware(rate_limit=1, force=False):
+        elapsed = time.perf_counter()-Input.last_hardware_update
+        if not force:
+            if elapsed < 0.5: return False
+            if elapsed > 0.75: rate_limit = None 
         Input.last_hardware_update = time.perf_counter()
-        if Input._bus is not None:
-            bat = Input._bus.read_byte_data(0x57, 0x2a)
-            if Input.battery_percent is None: Input.battery_percent = bat
-            else: Input.battery_percent = min(max(bat, Input.battery_percent-2), Input.battery_percent+2)
-            Input.battery_charging = Input._bus.read_byte_data(0x57, 0x02) >> 7 & 1 == 1
-            Input.cpu_temp = Input._bus.read_byte_data(0x57, 0x04)-40
+        try:
+            if Input._bus is not None:
+                bat = Input._bus.read_byte_data(0x57, 0x2a)
+                Input.battery_percent = Input.rate_limit(bat, Input.battery_percent, rate_limit)
+                Input.battery_charging = Input._bus.read_byte_data(0x57, 0x02) >> 7 & 1 == 1
+            if Input._embpi is not None:
+                Input.cpu_temp = Input._embpi.get_cpu_temp()
+                ram = Input._embpi.get_ram_info()
+                Input.memory_usage = float(ram[1])/float(ram[0])*100
+            if Input._psutil is not None and not RASPBERRY_PI:
+                bat = Input._psutil.sensors_battery()
+                Input.battery_percent = bat.percent
+                Input.battery_charging = bat.power_plugged
+                Input.memory_usage = math.ceil(Input._psutil.virtual_memory().percent)
+        except OSError:
+            pass
         return True
     
     @staticmethod
@@ -214,31 +287,20 @@ class Settings(SettingsBase):
     presets = {
         "pi": {
             "fullscreen_refresh": True,
-            "maintain_fullscreen_ratio": False,
             "low_detail": True,
             "reduce_motion": False,
             "enable_transparency": False,
             "enable_shaders": False,
         },
-        "ultra_low": {
-            "fullscreen_refresh": False,
-            "maintain_fullscreen_ratio": True,
-            "low_detail": True,
-            "reduce_motion": True,
-            "enable_transparency": True,
-            "enable_shaders": False,
-        },
         "low": {
             "fullscreen_refresh": False,
-            "maintain_fullscreen_ratio": False,
-            "low_detail": False,
+            "low_detail": True,
             "reduce_motion": True,
             "enable_transparency": True,
             "enable_shaders": False,
         },
         "medium": {
             "fullscreen_refresh": True,
-            "maintain_fullscreen_ratio": False,
             "low_detail": False,
             "reduce_motion": False,
             "enable_transparency": True,
@@ -246,7 +308,6 @@ class Settings(SettingsBase):
         },
         "high": {
             "fullscreen_refresh": True,
-            "maintain_fullscreen_ratio": False,
             "low_detail": False,
             "reduce_motion": False,
             "enable_transparency": True,
@@ -259,7 +320,6 @@ class Settings(SettingsBase):
         "limit_fps": "Limit FPS",
         "vsync": "Vsync",
         "fullscreen_refresh": "Fullscreen refresh",
-        "maintain_fullscreen_ratio": "Maintain fullscreen ratio",
         "low_detail": "Low detail",
         "reduce_motion": "Reduce motion",
         "enable_transparency": "Enable transparency",
@@ -274,7 +334,6 @@ class Settings(SettingsBase):
         "limit_fps",
         "vsync",
         "fullscreen_refresh",
-        "maintain_fullscreen_ratio",
         "low_detail",
         "reduce_motion",
         "enable_transparency",
@@ -282,6 +341,7 @@ class Settings(SettingsBase):
         "volume_music",
         "volume_sfx",
         "show_hitboxes",
+        "joystick_calibration"
     ]
 
     windowed = False
@@ -289,7 +349,6 @@ class Settings(SettingsBase):
     limit_fps = True
     vsync = False
     fullscreen_refresh = True
-    maintain_fullscreen_ratio = False
     low_detail = False
     reduce_motion = False
     enable_transparency = True
@@ -297,6 +356,7 @@ class Settings(SettingsBase):
     volume_music = 1 if RASPBERRY_PI else 0.2
     volume_sfx = 1 if RASPBERRY_PI else 0.2
     show_hitboxes = False
+    joystick_calibration = [0, 0.5, 1, 0, 0.5, 1] # min x, mid x, max x, min y, mid y, max y
     last_preset = None
 
 
@@ -325,8 +385,7 @@ class MusicManager:
     def play_queued(sync=True):
         def thread():
             if Settings.volume_music == 0: return
-            while pygame.mixer.get_init() is None:
-                time.sleep(0.5)
+            while pygame.mixer.get_init() is None: pass
             pygame.mixer.music.load(MusicManager.name)
             pygame.mixer.music.set_volume(Settings.volume_music)
             MusicManager.play()
@@ -389,6 +448,61 @@ class MusicManager:
                 MusicManager.fade_out()
 
 
+## SELECTION ##
+
+class Selection:
+    def __init__(self):
+        self.idx = self.x, self.y = 0, 0
+        self.max = self.xmax, self.ymax = 0, 0
+        self.menu = 0
+        self.submenu = 0
+        self.prev_menu = 0
+        self.scrollable = False
+        self.button_pressed = False
+        self.mouse_pressed = False
+        self.using_mouse = True
+        self.direction_time_x = 0
+        self.direction_time_y = 0
+        self.direction_delay = 0
+        self.on_change = None
+
+    def __repr__(self):
+        return f"<Selection(idx={self.idx}, max={self.max}, menu={self.menu}, submenu={self.submenu})>"
+    
+    def set(self, idx=None, max=None, menu=None, submenu=None):
+        if idx is not None:
+            prev = self.idx
+            self.idx = self.x, self.y = idx
+            if prev != self.idx and callable(self.on_change): self.on_change(prev)
+        if max is not None: self.max = self.xmax, self.ymax = max
+        if menu is not None and menu != self.menu:
+            self.prev_menu = self.menu
+            self.menu = menu
+        if submenu is not None: self.submenu = submenu
+        self.scrollable = False
+
+    def enable_mouse(self):
+        if not self.using_mouse:
+            self.using_mouse = True
+            Input.show_mouse(True)
+
+    def disable_mouse(self):
+        if self.using_mouse:
+            self.using_mouse = False
+            Input.show_mouse(False)
+            
+    def increment(self, x, y, avoid_indexes=None):
+        if avoid_indexes is None: avoid_indexes = [self.idx]
+        i = 0
+        while self.idx in avoid_indexes and i < len(avoid_indexes):
+            if self.xmax > 0: self.x = (self.x+x)%self.xmax
+            if self.ymax > 0: self.y = (self.y+y)%self.ymax
+            prev = self.idx
+            self.idx = self.x, self.y
+            if prev != self.idx and callable(self.on_change): self.on_change(prev)
+            i += 1
+
+
 ## ASSETS ##
 
 class Spritesheet:
@@ -440,14 +554,13 @@ class Fontsheet:
         self.sprites = {}
         self.char_widths = {}
         self.set_char_widths(.66, " .,!")
+        self.unknown_char = "?"
 
     def __getitem__(self, name):
-        return self.sprites[str(name).upper()]
+        return self.get(name)
     
     def __setitem__(self, name, surface):
-        if len(self.sprites) == 0:
-            self.tilew, self.tileh = surface.get_size()
-        self.sprites[name] = surface
+        self.set(name, surface)
 
     def __len__(self):
         return len(self.sprites)
@@ -456,10 +569,14 @@ class Fontsheet:
         return f"<Fontsheet[{len(self.sprites)}]>"
     
     def add(self, char, surface):
-        self[char] = surface
+        if len(self.sprites) == 0:
+            self.tilew, self.tileh = surface.get_size()
+        self.sprites[char] = surface
 
-    def get(self, char):
-        return self[char]
+    def get(self, char, upper=True):
+        char = str(char)
+        if upper: char = char.upper()
+        return self.sprites.get(char)
     
     def add_tile(self, char, im, x, y, tilesize, destsize=None):
         surface = Assets.sized_surface(tilesize, alpha=True)
@@ -470,27 +587,30 @@ class Fontsheet:
         for char in chars:
             self.char_widths[char] = width
 
-    def get_width(self, text):
-        return sum(self.char_widths.get(char, 1)*self.tilew for char in text)
+    def get_width(self, text, upper=True):
+        if upper: text = text.upper()
+        return sum(math.floor(self.char_widths.get(char, 1)*self.tilew) for char in text)
     
-    def render(self, text):
-        if len(text) == 0: return
-        if len(text) == 1: return self.get(text)
+    def render(self, text, **kwargs):
+        if len(text) == 0: return Assets.sized_surface(1, self.tileh)
         lines = text.split("\n")
-        surface = Assets.sized_surface(math.ceil(max(self.get_width(ln) for ln in lines)), len(lines)*self.tileh)
+        surface = Assets.sized_surface(math.ceil(max(self.get_width(ln, **kwargs) for ln in lines)), len(lines)*self.tileh)
         y = 0
         for ln in lines:
-            x = math.floor(surface.get_width()/2-self.get_width(ln)/2)
+            x = math.floor(surface.get_width()/2-self.get_width(ln, **kwargs)/2)
             for char in ln:
-                surface.blit(self.get(char), (x, y))
-                x += math.floor(self.get_width(char))
+                render = self.get(char, **kwargs)
+                if render is None: render = self.get(self.unknown_char, **kwargs)
+                if render is None: continue
+                surface.blit(render, (x, y))
+                x += self.get_width(char, **kwargs)
             y += self.tileh
         return surface
 
 
 class Collection:
-    def __init__(self):
-        self.items = {}
+    def __init__(self, items={}):
+        self.items = items.copy()
 
     def __getitem__(self, name):
         return self.items[str(name)]
@@ -507,8 +627,8 @@ class Collection:
     def add(self, name, item):
         self[name] = item
 
-    def get(self, name):
-        return self[name]
+    def get(self, name, df=None):
+        return self.items.get(name, df)
 
 
 class Assets(object):
@@ -516,13 +636,14 @@ class Assets(object):
     debug_font = None
     status_font = None
     status_icons = None
+    status_modules = ["time", "battery", "cpu"]
 
     @staticmethod
     def init():
         asset_dir = Assets.asset_dir
         Assets.set_dir("assets")
-        Assets.debug_font = pygame.font.SysFont("Helvetica", 13)
-        Assets.status_font = pygame.font.SysFont("Helvetica", 14, bold=True)
+        Assets.debug_font = pygame.font.Font(Assets.get("Helvetica.ttf"), 13)
+        Assets.status_font = pygame.font.Font(Assets.get("Helvetica-Bold.ttf"), 14)
         Assets.status_icons = Assets.load_spritesheet("status_icons.png", (9, 9), (18, 18))
         Assets.asset_dir = asset_dir
 
@@ -536,9 +657,12 @@ class Assets(object):
 
     @staticmethod
     def convert_surface(surface, alpha=True):
-        if alpha:
-            return surface.convert_alpha()
-        return surface.convert()
+        try:
+            if alpha:
+                return surface.convert_alpha()
+            return surface.convert()
+        except pygame.error:
+            return surface
 
     @staticmethod
     def sized_surface(*size, alpha=True):
@@ -682,24 +806,217 @@ class Assets(object):
     
     @staticmethod
     def status_indicator(rjust=False):
-        surface = Assets.sized_surface(96, 20 if Input.cpu_temp is None else 40)
-        x = surface.get_width()-18-4 if rjust else 4
-        y = 0
-        if Input.battery_percent is not None:
-            icon = 4 if Input.battery_charging else 0
-            if Input.battery_percent > 30: icon += 1
-            if Input.battery_percent > 50: icon += 1
-            if Input.battery_percent > 75: icon += 1
-            surface.blit(Assets.status_icons[icon], (x, y))
-            text = Assets.status_font.render(f"{Input.battery_percent}%", False, WHITE)
-            surface.blit(text, (x-text.get_width()-4 if rjust else x+22, y))
-            y += 20
-        if Input.cpu_temp is not None:
-            icon = 8
-            if Input.cpu_temp > 25: icon += 1
-            if Input.cpu_temp > 45: icon += 1
-            surface.blit(Assets.status_icons[icon], (x, y))
-            text = Assets.status_font.render(f"{Input.cpu_temp}°C", False, WHITE)
-            surface.blit(text, (x-text.get_width()-4 if rjust else x+22, y))
-            y += 20
+        surface = Assets.sized_surface(96, 20*len(Assets.status_modules))
+        iy = 0
+        for i, name in enumerate(Assets.status_modules):
+            ix = surface.get_width()-18-4 if rjust else 4
+            tx, ty = ix-5 if rjust else ix+18+5, iy+3
+            icon, text = None, None
+            if name == "time":
+                text = time.strftime("%H:%M")
+            elif name == "battery":
+                if Input.battery_percent is None: continue
+                icon = 4 if Input.battery_charging else 0
+                if Input.battery_percent > 30: icon += 1
+                if Input.battery_percent > 50: icon += 1
+                if Input.battery_percent > 70: icon += 1
+                text = f"{Input.battery_percent}%"
+            elif name == "cpu":
+                if Input.cpu_temp is None: continue
+                icon = 8
+                if Input.cpu_temp > 50: icon += 1
+                if Input.cpu_temp > 80: icon += 1
+                text = f"{math.ceil(Input.cpu_temp)}°C"
+            elif name == "memory":
+                if Input.memory_usage is None: continue
+                icon = 12
+                if Input.memory_usage > 40: icon += 1
+                if Input.memory_usage > 80: icon += 1
+                text = f"{math.ceil(Input.memory_usage)}%"
+            if icon is not None:
+                icon = Assets.status_icons[icon]
+                surface.blit(icon, (ix, iy))
+            if text is not None:
+                text = Assets.status_font.render(text, False, WHITE)
+                if icon is None: tx = ix+18 if rjust else ix
+                if rjust: tx -= text.get_width()
+                surface.blit(text, (tx, ty))
+            iy += 20
+        if iy < surface.get_height():
+            surface = surface.subsurface(0, 0, surface.get_width(), iy)
         return surface
+
+
+## GAMECONTROLLER ##
+
+class GameControllerBase:
+    def __init__(self):
+        self.save_base = os.path.abspath("save")
+        self.game_size = self.game_width, self.game_height = 800, 480
+        self.screen_info = pygame.display.Info()
+        self.screen_size = self.screen_width, self.screen_height = self.screen_info.current_w, self.screen_info.current_h
+        self.running = False
+        self.buffer_touch_selection = False
+        self.frame = 0
+
+    def init_display(self):
+        if Settings.windowed:
+            outsize = self.game_size
+            i = 1
+            while outsize[0] <= self.screen_width and outsize[1] <= self.screen_height:
+                i += 1
+                outsize = (self.game_width*i, self.game_height*i)
+            outsize = (self.game_width*(i-1), self.game_height*(i-1))
+        else:
+            outsize = self.screen_size
+        if PYGAME_2:
+            flags = pygame.DOUBLEBUF
+        else:
+            flags = pygame.HWSURFACE | pygame.HWACCEL | pygame.ASYNCBLIT
+        main_flags = flags | (pygame.RESIZABLE if Settings.windowed else pygame.FULLSCREEN)
+        if PYGAME_2 and not RASPBERRY_PI:
+            self.main_surface = pygame.display.set_mode(outsize, main_flags, vsync=Settings.vsync)
+        else:
+            self.main_surface = pygame.display.set_mode(outsize, main_flags)
+        self.output_size = self.output_width, self.output_height = self.main_surface.get_size()
+        self.screen = pygame.Surface(self.game_size, flags)
+        if not Settings.enable_transparency:
+            self.main_surface.set_alpha(None)
+            self.screen.set_alpha(None)
+        self.force_full_refresh = True
+    
+    def init(self):
+        self.init_display()
+        Assets.init()
+        Input.init()
+        Input.set_touch_handlers(
+            press=self.handle_touch_event,
+            release=self.handle_touch_event,
+            move=self.handle_touch_event
+        )
+        self.selection = Selection()
+        if RASPBERRY_PI:
+            self.selection.disable_mouse()
+            pygame.event.set_blocked(None)
+            pygame.event.set_allowed(pygame.QUIT)
+        else:
+            self.selection.enable_mouse()
+        self.hidden = False
+    
+    def handle_touch_event(self, event, touch):
+        if self.hidden or not self.running: return
+        if event == ft5406.TS_MOVE: # touch down or move
+            self.selection.disable_mouse()
+            prev = self.selection.mouse_pressed
+            self.selection.mouse_pressed = True
+            self.update_cursor_selection(just_pressed=not prev, touch_pos=touch.position)
+        elif event == ft5406.TS_RELEASE: # else touch up
+            self.buffer_touch_selection = True
+    
+    def get_cursor_pos(self, touch_pos=None):
+        if touch_pos is None:
+            x, y = pygame.mouse.get_pos() # between (0, 0) and (output_width, output_height)
+            x *= self.game_width/self.output_width # scale to (game_width, game_height)
+            y *= self.game_height/self.output_height
+        else:
+            x, y = touch_pos # between (0, 0) and (screen_width, screen_height)
+            x *= self.game_width/self.screen_width # scale to (game_width, game_height)
+            y *= self.game_height/self.screen_height
+        return int(x), int(y)
+
+    def update_cursor_selection(self, just_pressed=False, touch_pos=None):
+        pass
+
+    def launch_selection(self):
+        pass
+
+    def update(self):
+        pass
+
+    def draw(self):
+        pass
+
+    def draw_overlays(self):
+        pass
+
+    def patch_background(self, rect):
+        pass
+
+    def scale_rect(self, rect, xscale, yscale):
+        new = rect.copy()
+        new.w = new.w*xscale
+        new.h = new.h*yscale
+        new.x = new.x*xscale
+        new.y = new.y*yscale
+        return new
+    
+    def ease_to(self, value, target, ease=4, snap=2):
+        if abs(target-value) < snap: return target
+        return value + (target-value)/ease
+
+    # @profilehooks.profile
+    def mainloop(self):
+        self.clock = pygame.time.Clock()
+        self.running = True
+        self.rects = []
+        self.prev_rects = []
+        self.draw_next = []
+
+        while self.running:
+            self.dt = self.clock.tick(60 if Settings.limit_fps else 0)/1000
+            if self.hidden: continue
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                    break
+                if event.type == pygame.VIDEORESIZE and Settings.windowed:
+                    self.output_size = self.output_width, self.output_height = event.dict["size"]
+                    self.force_full_refresh = True
+                elif event.type == pygame.MOUSEMOTION:
+                    if not self.force_full_refresh:
+                        if RASPBERRY_PI:
+                            self.selection.disable_mouse()
+                        else:
+                            self.selection.enable_mouse()
+                            self.update_cursor_selection()
+                elif event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP) and not RASPBERRY_PI:
+                    if event.button == 1:
+                        if event.type == pygame.MOUSEBUTTONDOWN:
+                            self.selection.mouse_pressed = True
+                            self.update_cursor_selection(just_pressed=True)
+                        else:
+                            self.launch_selection()
+                            self.selection.mouse_pressed = False
+            self.update()
+            if self.buffer_touch_selection:
+                self.launch_selection()
+                self.selection.mouse_pressed = False
+                self.buffer_touch_selection = False
+
+            self.draw()
+            self.screen_out = self.screen.copy()
+            self.draw_overlays()
+            if self.hidden: continue
+            try:
+                if self.output_size == self.game_size:
+                    self.main_surface.blit(self.screen_out, (0, 0))
+                else:
+                    self.main_surface.blit(pygame.transform.scale(self.screen_out, self.output_size), (0, 0))
+            except pygame.error: continue
+            self.rects = list(filter(lambda rect: rect is not None, self.rects))
+            if self.force_full_refresh or Settings.fullscreen_refresh:
+                pygame.display.update()
+            else:
+                xscale, yscale = self.output_width/self.game_width, self.output_height/self.game_height
+                inflated = [self.scale_rect(rect, xscale, yscale).inflate(3, 3) for rect in self.rects+self.prev_rects]
+                pygame.display.update(inflated)
+            if not Settings.fullscreen_refresh:
+                for rect in self.rects:
+                    self.patch_background(rect)
+            self.prev_rects = self.rects[:]
+            self.force_full_refresh = False
+            self.frame += 1
+
+        Input.stop()
+        pygame.quit()

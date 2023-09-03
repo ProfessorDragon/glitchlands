@@ -290,7 +290,7 @@ class Player(pygame.sprite.Sprite):
                 if self.facing_right:
                     self.facing_right = False
                     self.anim_frame = 0
-            if (Input.primary or Input.up) and self.abilities.jump:
+            if (Input.primary or (Input.up and not RASPBERRY_PI)) and self.abilities.jump:
                 self.jump_buffer += 1
                 if (self.fall_frame < self.physics.coyote_ticks and self.jump_count == 0) or \
                     (self.fall_frame >= self.physics.coyote_ticks and self.jump_count > 0):
@@ -412,7 +412,7 @@ class Player(pygame.sprite.Sprite):
                 elif dx > 0: self.collide_right(obj.hitbox.left)
 
     def update_vertical_collisions(self, dy):
-        if self.fall_frame > 0: self.step_timer = 0
+        if self.fall_frame > 1: self.step_timer = 0
         elif self.step_timer > 0: self.step_timer -= 1
         self.fall_frame += 1
         self.update_hitbox()

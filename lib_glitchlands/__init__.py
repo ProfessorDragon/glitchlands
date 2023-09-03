@@ -56,6 +56,8 @@ SUBMENU_NO_SKIP_CREDITS = 1
 MENU_PAUSED = 4
 MENU_MAP = 5
 MENU_COMPLETION = 6
+SUBMENU_UNLOCK_MASTER = 0
+SUBMENU_NO_UNLOCK_MASTER = 1
 
 
 ## GENERAL ##
@@ -182,7 +184,7 @@ class Background:
             self.generate_image()
         else:
             self.transition_timer = 11
-            self.transition_dir = 60*(-1 if side > 0 else 1)
+            self.transition_dir = 60*(1 if side > 0 else -1)
 
     def update(self):
         if self.transition_timer > 0:
@@ -296,48 +298,6 @@ class Checkpoint:
         self.centerx = json_data.get("centerx")
         self.facing_right = json_data.get("facing_right")
         self.update_valid()
-
-
-class Selection:
-    def __init__(self):
-        self.idx = self.x, self.y = 0, 0
-        self.max = self.xmax, self.ymax = 0, 0
-        self.menu = 0
-        self.submenu = 0
-        self.prev_menu = 0
-        self.scrollable = False
-        self.button_pressed = False
-        self.mouse_pressed = False
-        self.using_mouse = True
-        self.direction_time = 0
-        self.direction_delay = 0
-
-    def __repr__(self):
-        return f"<Selection(idx={self.idx}, max={self.max}, menu={self.menu}, submenu={self.submenu})>"
-    
-    def set(self, idx=None, max=None, menu=None, submenu=None):
-        if idx is not None: self.idx = self.x, self.y = idx
-        if max is not None: self.max = self.xmax, self.ymax = max
-        if menu is not None and menu != self.menu:
-            self.prev_menu = self.menu
-            self.menu = menu
-        if submenu is not None: self.submenu = submenu
-        self.scrollable = False
-
-    def enable_mouse(self):
-        if not self.using_mouse:
-            self.using_mouse = True
-            Input.show_mouse(True)
-
-    def disable_mouse(self):
-        if self.using_mouse:
-            self.using_mouse = False
-            Input.show_mouse(False)
-            
-    def increment(self, x, y):
-        if self.xmax > 0: self.x = (self.x+x)%self.xmax
-        if self.ymax > 0: self.y = (self.y+y)%self.ymax
-        self.idx = self.x, self.y
 
 
 class DialogueState:

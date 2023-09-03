@@ -3,7 +3,7 @@
 
 Just a game I made for fun. (Let me know if you experience any issues)
 
-See more details & download for Windows on itch: https://codefizz.itch.io/glitchlands
+See more details and download for Windows on Itch: https://codefizz.itch.io/glitchlands
 
 
 ### Command line arguments

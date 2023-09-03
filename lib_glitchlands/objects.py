@@ -304,8 +304,7 @@ class Decoration(Object):
                 "anim_delay": 8,
                 "yofs": -99,
                 "yv": 11,
-                "speed_decay": .9,
-                "hide_low_detail": True
+                "speed_decay": .9
             },
             {
                 "name": "split_left",
@@ -413,7 +412,10 @@ class AreaTrigger(Activateable):
                 self.gc.glitch_chance = 1000
                 self.gc.visited_final_world = True
         elif self.num == 1: # checkpoint
-            self.gc.set_checkpoint(bottom=self.rect.bottom, centerx=self.rect.centerx)
+            if self.gc.player.fall_frame == 0:
+                self.gc.set_checkpoint(bottom=self.rect.bottom, centerx=self.rect.centerx)
+            else:
+                self.activated = False
     def collides_any(self, entity):
         # the trigger cannot have not been activated, it must be in the current level,
         # the entity must be a player, and the trigger must collide with the entity
@@ -493,7 +495,7 @@ class FireTrap(Object):
         self.upside_down = self.num%2 == 1
         self.rect = pygame.Rect(self.x, self.y, self.frames[0].get_width(), self.frames[0].get_height())
         self.update_hitbox()
-        self.collides = COLLISION_HAZARD
+        self.collides = COLLISION_SHIELDBREAK
         self.on = False
         self.change_timer = 0
         if self.num in (0, 1):
@@ -516,7 +518,7 @@ class FireTrap(Object):
         else:
             self.on = not self.on
             if self.on:
-                self.collides = COLLISION_HAZARD
+                self.collides = COLLISION_SHIELDBREAK
                 self.change_timer = 90
             else:
                 self.collides = COLLISION_NONE
@@ -726,7 +728,7 @@ class FallingPlatform(Object):
                 if self.drop_timer == 0:
                     self.anim = "drop"
                     self.anim_frame = 0
-                    self.drop_timer = 120
+                    self.drop_timer = 100
                     self.gc.play_sound("falling_platform_drop")
         elif self.anim == "drop":
             self.anim_frame += 1
@@ -864,6 +866,11 @@ class TimedGate(Activateable):
                 self.position_activated = self.activated = True
             elif self.position_activated and self.gc.player.x > self.hitbox.right:
                 self.position_activated = self.activated = False
+        elif  self.num//2 == 3:
+            if self.gc.player.x+self.gc.player.rectw < self.hitbox.left and self.gc.player.y >= self.spawn_y-self.tileh:
+                self.position_activated = self.activated = True
+            elif self.position_activated and (self.gc.player.x > self.hitbox.right or self.gc.player.y < self.spawn_y-self.tileh):
+                self.position_activated = self.activated = False
         if not self.upside_down:
             if self.activated:
                 self.y += 3
@@ -897,7 +904,7 @@ class TimedGate(Activateable):
     def draw(self):
         if self.upside_down:
             return self.blit_image(self.image, self.rect, area=(0, self.spawn_y-self.y, self.rect.w, self.rect.h))
-        else:
+        elif self.rect.h-self.y+self.spawn_y > 0:
             return self.blit_image(self.image, self.hitbox, area=(0, 0, self.rect.w, self.rect.h-self.y+self.spawn_y))
 
 class EndgameLever(Activateable):
@@ -945,15 +952,13 @@ class CrystalBarrier(Object):
     def update_config(self, config):
         super().update_config(config)
         self.yrep = config.get("yrep", 1)
-        # 3: [(0, -.4), (-.4, .4), (.4, .4)]
-        # 4: [(-.4, -.5), (.4, -.5), (-.4, .5), (.4, .5)]
-        # 5: [(-.4, -.7), (.4, -.7), (0, 0), (-.4, .7), (.4, .7)]
-        # 7: [(0, -1.4), (-.4, -.7), (.4, -.7), (0, 0), (-.4, .7), (.4, .7), (0, 1.4)]
-        self.crystal_positions = [
-            [(-.4, -.7), (.4, -.7), (0, 0), (-.4, .7), (.4, .7)],
-            [(-.4, -.5), (.4, -.5), (-.4, .5), (.4, .5)],
-            [(0, -.4), (-.4, .4), (.4, .4)]
-        ][self.gc.difficulty]
+        layouts = {
+            3: [(0, -.4), (-.4, .4), (.4, .4)],
+            4: [(-.4, -.5), (.4, -.5), (-.4, .5), (.4, .5)],
+            5: [(-.4, -.7), (.4, -.7), (0, 0), (-.4, .7), (.4, .7)],
+            7: [(0, -1.4), (-.4, -.7), (.4, -.7), (0, 0), (-.4, .7), (.4, .7), (0, 1.4)]
+        }
+        self.crystal_positions = layouts[self.gc.crystal_requirements[self.gc.difficulty]]
         for crystals in range(min(self.gc.crystal_count, len(self.crystal_positions))+1):
             im = Assets.sized_surface(self.tilew*2, (self.yrep+1)*self.tileh)
             body = Assets.tile_surface_repetition(self.gc.assets.virus["crystal_barrier"][0], 1, self.yrep)
@@ -1096,10 +1101,10 @@ class Goo(Object):
         self.collides = COLLISION_NONE if self.style == 1 else COLLISION_PASS
         self.layer += 1
     def update_hitbox(self):
-        self.hitbox = pygame.Rect(self.rect.x, self.rect.y-4, self.rect.width, self.rect.height)
+        self.hitbox = pygame.Rect(self.rect.x, self.rect.y-4, self.rect.width, self.tileh//2)
     def collides_any(self, entity):
         if isinstance(entity, player.Player) and self.hitbox.colliderect(entity.hitbox):
-            entity.xv *= 0.9
+            entity.xv *= 0.92
         return False
     def collides_horizontal(self, entity, dx=0):
         return self.collides_any(entity)
@@ -1206,6 +1211,14 @@ class Npc(Activateable):
                     slides = [
                         DialogueSlide(name, "You must go north and destroy\nthe virus.")
                     ]
+            elif visited_count == 3:
+                if not visited_this:
+                    slides = [
+                        DialogueSlide(name, "Not many make it this far."),
+                        DialogueSlide(name, "Here are my last crystals. I want\nyou to have them."),
+                        DialogueSlide(name, crystals=2)
+                    ]
+                slides.append(DialogueSlide(name, "Farewell and good luck."))
         elif self.num == 1:
             name = "survivor"
             if visited_count == 0:
@@ -1257,6 +1270,8 @@ class Npc(Activateable):
                 ]
             if not visited_this:
                 slides.append(DialogueSlide(name, crystals=1))
+        if len(slides) == 0:
+            slides = [DialogueSlide("", "")]
         self.gc.npc_dialogue.show(slides, self.dialogue_finished)
         self.gc.player.facing_right = not self.facing_right
         self.gc.player.talk_npc()
@@ -1317,7 +1332,7 @@ class SawTrap(Object):
             elif self.num == 3: self.x += self.tilew-self.frames[0].get_width()//2
         self.rect = pygame.Rect(self.x, self.y, self.frames[0].get_width(), self.frames[0].get_height())
         self.update_hitbox()
-        self.collides = COLLISION_HAZARD if self.constrained else COLLISION_SHIELDBREAK
+        self.collides = COLLISION_SHIELDBREAK
         self.anim_delay = 2
     def update_hitbox(self):
         if not self.constrained: self.hitbox = self.rect.inflate(-20, -20)
@@ -1363,7 +1378,10 @@ class Vines(Object):
         if Settings.low_detail:
             self.self_destruct = True
             return
-        self.image = self.gc.assets.decoration["vines"][self.num]
+        if self.num < 0:
+            self.image = self.gc.assets.decoration["signs"][-self.num-1]
+        else:
+            self.image = self.gc.assets.decoration["vines"][self.num]
         self.rect = pygame.Rect(self.x, self.y, self.image.get_width(), self.image.get_height())
         self.collides = COLLISION_NONE
 
@@ -1375,7 +1393,7 @@ class Bat(Object):
         self.rect = pygame.Rect(self.x, self.y, self.frames[0].get_width(), self.frames[0].get_height())
         self.anim = "idle"
         self.update_hitbox()
-        self.collides = COLLISION_HAZARD
+        self.collides = COLLISION_SHIELDBREAK
         self.anim_delay = 4
         self.facing_right = None
         self.target = None
@@ -1385,7 +1403,7 @@ class Bat(Object):
         self.attack_delay = config.get("attack_delay")
         self.layer += 1
     def update_hitbox(self):
-        if self.anim == "fly": self.hitbox = pygame.Rect(self.rect.x+16, self.rect.y+16, 60, 24)
+        if self.anim == "fly": self.hitbox = pygame.Rect(self.rect.x+17, self.rect.y+16, 58, 24)
         else: self.hitbox = pygame.Rect(self.rect.x+32, self.rect.y, 32, 48)
     def update(self):
         if self.facing_right is None:
@@ -1495,11 +1513,11 @@ class VirusBoss(Object):
         self.health = 3
         self.hurt_timer = 0
         self.attack_count = 0
-        self.max_attacks = 22
+        self.max_attacks = 20
         self.level_order = {}
         levels = list(range(6))
         random.shuffle(levels)
-        for i, atk in enumerate((4, 11, 20)):
+        for i, atk in enumerate((3, 10, self.max_attacks-2)):
             self.level_order[atk] = levels[i]
         self.arena_barrier = None
         self.boss_bar = None
@@ -1522,7 +1540,7 @@ class VirusBoss(Object):
                 {"center": (self.gc.game_width//2, self.gc.game_height//2), "xv": 30, "yv": 0,
                  "fade_time": 0, "size_change": -0.015}
             ],
-            class_=particles.FadeOutParticle, dirofs=360, count=30
+            class_=particles.FadeOutParticle, dirofs=360, count=30, show_low_detail=True
         ).spawn()
 
     def create_glitch_zone(self, positions, mirror=True, delay=0, kwargs={}, kwargs2={}):
@@ -1655,25 +1673,29 @@ class VirusBoss(Object):
                 })
             )
         elif attack == self.ATTACK_SPIKES:
-            gaps = set(random.randint(1, 9) for _ in range(2))
+            gaps = set(random.randint(1, 9) for _ in range(random.randint(1, 3)))
             delays = list(range(11))
             random.shuffle(delays)
             self.attack_timer = 10
             for x, delay in enumerate(delays):
-                self.attack_timer += 21-diff*3
+                self.attack_timer += 25-diff*3
                 if x in gaps: continue
                 self.gc.push_object(
                     VirusTentacle(self.gc, self.level, {
                         "x": self.tilew*1.5+x*self.tilew*2,
                         "y": -self.gc.game_height,
                         "direction": 0,
-                        "drop_speed": 12,
+                        "drop_speed": 11,
                         "drop_delay": delay*(21-diff*3)+10,
                         "rise_delay": 50
                     })
                 )
         elif attack == self.ATTACK_SAWS:
-            gaps = [(1, 2), (1, 2), (2, 3), (2, 3), (3, 4), (3,), (5, 2)]
+            gaps = [(1, 2), (2, 3), (3, 4), (5, 2)]
+            if random.randint(0, 1) == 0: gaps.append((1, 2))
+            else: gaps.append((2, 3))
+            if diff > 0: gaps.append((3,))
+            else: gaps.append((2, 3))
             random.shuffle(gaps)
             gaps = gaps[:5]
             self.attack_timer = 0
@@ -1732,7 +1754,7 @@ class VirusBoss(Object):
                 self.attack_timer += 5*10
         elif attack in (self.ATTACK_BLUE_GLITCH_HORIZONTAL, self.ATTACK_BLUE_GLITCH_VERTICAL):
             positions = [(x+2, y+12) for x in range(5) for y in range(2)]
-            self.create_glitch_zone(positions, kwargs={"num": 2, "physics": {"jump_height": 10}})
+            self.create_glitch_zone(positions, kwargs={"num": 2, "physics": {"jump_height": 10.5}})
             self.attack_timer = 200
             if attack == self.ATTACK_BLUE_GLITCH_HORIZONTAL:
                 self.init_horizontal_attack(1.2)
@@ -1762,8 +1784,14 @@ class VirusBoss(Object):
             positions = [(x+4, y+11) for x in range(3) for y in range(3) if (x, y) != (1, 1)]
             self.create_glitch_zone(positions, kwargs={"num": 1})
             self.create_glitch_zone([(5, 12)], delay=2,
-                kwargs={"num": 1, "warp": [19.5*self.tilew, 14*self.tileh], "inflate_hitbox": self.tilew*2, "tip_yofs": -self.tileh*2},
-                kwargs2={"warp": [5.5*self.tilew, 14*self.tileh], "inflate_hitbox": self.tilew*2, "tip_yofs": -self.tileh*2}
+                kwargs={
+                    "num": 1, "warp": [19.5*self.tilew, 14*self.tileh], "inflate_hitbox": self.tilew*2,
+                    "tip_yofs": -self.tileh*2
+                },
+                kwargs2={
+                    "warp": [5.5*self.tilew, 14*self.tileh], "inflate_hitbox": self.tilew*2,
+                    "tip_yofs": -self.tileh*2
+                }
             )
             self.attack_timer = 200
             if attack == self.ATTACK_GREEN_GLITCH_HORIZONTAL:
@@ -1798,9 +1826,9 @@ class VirusBoss(Object):
             self.attack_timer = 10*10-10
             chunk = self.level_order[self.attack_count]
             if chunk == 0:
-                self.create_level_chunk(6, 7 if diff > 0 else 8, 1, self.spike_pillar_chunk(0, 0, 2, 7 if diff > 0 else 6, 1))
+                self.create_level_chunk(6, 8, 1, self.spike_pillar_chunk(0, 0, 2, 6, 1))
                 self.create_level_chunk(8, 13, 1, [{"num": 0, "type": OBJTYPE_SPIKE}])
-                self.create_level_chunk(15, 0, 0, self.spike_pillar_chunk(0, 0, 4, 8, 0))
+                self.create_level_chunk(15, 0, 0, (self.spike_pillar_chunk if diff > 0 else self.pillar_chunk)(0, 0, 4, 8, 0))
                 self.create_level_chunk(15, 12, 1, self.spike_pillar_chunk(0, 0, 4, 2, 1))
                 self.create_level_chunk(20.5, 13, 1, [{"num": 0, "type": OBJTYPE_HITBUTTON, "owner": self}])
             elif chunk == 1:
@@ -1813,7 +1841,6 @@ class VirusBoss(Object):
                     {"num": 1, "type": OBJTYPE_BEAM, "x": 0, "y": self.tileh, "xrep": 3}
                 ])
                 self.create_level_chunk(11, 4, 1, [
-                    {"num": 2, "type": OBJTYPE_SPIKE, "x": 0, "y": 0, "xrep": 1 if diff > 0 else 0},
                     {"num": 2, "type": OBJTYPE_SPIKE, "x": 5*self.tilew, "y": 0, "xrep": 2},
                     {"num": 0, "type": OBJTYPE_BLOCK, "x": 0, "y": self.tileh},
                     {"num": 1, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": self.tileh, "xrep": 5},
@@ -1836,14 +1863,15 @@ class VirusBoss(Object):
                     {"num": 4, "type": OBJTYPE_BLOCK, "x": 4*self.tilew, "y": 9*self.tileh, "xrep": 4},
                     {"num": 5, "type": OBJTYPE_BLOCK, "x": 8*self.tilew, "y": 9*self.tileh},
                 ])
-                self.create_level_chunk(20, 13, 1, [{"num": 0, "type": OBJTYPE_SPIKE, "xrep": 4}])
+                if diff > 0:
+                    self.create_level_chunk(20, 13, 1, [{"num": 0, "type": OBJTYPE_SPIKE, "xrep": 4}])
             elif chunk == 2:
                 self.create_level_chunk(5, 13, 1, [{"num": 0, "type": OBJTYPE_SPIKE, "xrep": 2}])
                 self.create_level_chunk(7, 9, 1, [
                     {"num": 0, "type": OBJTYPE_BLOCK, "x": 0, "y": 0},
                     {"num": 1, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": 0, "xrep": 2},
                     {"num": 2, "type": OBJTYPE_BLOCK, "x": 3*self.tilew, "y": 0},
-                    {"num": 2, "type": OBJTYPE_BEAM, "x": 4*self.tilew, "y": 0, "xrep": 0 if diff > 0 else 1},
+                    {"num": 2, "type": OBJTYPE_BEAM, "x": 4*self.tilew, "y": 0, "xrep": 0 if diff > 1 else 1},
                     {"num": 3, "type": OBJTYPE_BLOCK, "x": 0, "y": self.tileh, "yrep": 4},
                     {"num": 4, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": self.tileh, "xrep": 2, "yrep": 4},
                     {"num": 5, "type": OBJTYPE_BLOCK, "x": 3*self.tilew, "y": self.tileh},
@@ -1855,8 +1883,8 @@ class VirusBoss(Object):
                     {"num": 5, "type": OBJTYPE_BLOCK, "x": 6*self.tilew, "y": 3*self.tileh, "yrep": 3},
                 ])
                 self.create_level_chunk(7, 0, 0, self.spike_pillar_chunk(0, 0, 4, 7, 0, big=True))
-                self.create_level_chunk(14, 5, 0, [
-                    {"num": 0, "type": OBJTYPE_SPIKE, "x": 0, "y": 0, "xrep": 4},
+                self.create_level_chunk(14, 5 if diff > 0 else 4, 0, [
+                    {"num": 0, "type": OBJTYPE_SPIKE, "x": 0, "y": 0, "xrep": 4 if diff > 0 else 0},
                     {"num": 0, "type": OBJTYPE_BEAM, "x": 0, "y": self.tileh},
                     {"num": 1, "type": OBJTYPE_BEAM, "x": self.tilew, "y": self.tileh, "xrep": 2},
                     {"num": 2, "type": OBJTYPE_BEAM, "x": 3*self.tilew, "y": self.tileh},
@@ -1875,9 +1903,9 @@ class VirusBoss(Object):
                 ])
                 self.create_level_chunk(15.5, 13, 1, [{"num": 0, "type": OBJTYPE_HITBUTTON, "owner": self}])
             elif chunk == 3:
-                self.create_level_chunk(6, 0, 0, self.spike_pillar_chunk(0, 0, 3, 8 if diff > 0 else 7, 0))
+                self.create_level_chunk(6, -0.5, 0, self.spike_pillar_chunk(0, 0, 3, 8 if diff > 0 else 7, 0))
                 self.create_level_chunk(6, 11, 1, self.spike_pillar_chunk(0, 0, 3, 3, 1))
-                self.create_level_chunk(14, 0, 0, self.spike_pillar_chunk(0, 0, 3, 5, 0))
+                self.create_level_chunk(14, -0.5, 0, self.spike_pillar_chunk(0, 0, 3, 5, 0))
                 self.create_level_chunk(14, 9, 1, self.spike_pillar_chunk(0, 0, 3, 5, 1))
                 self.create_level_chunk(22, 11, 1, [
                     {"num": 0, "type": OBJTYPE_HITBUTTON, "x": .5*self.tilew, "y": 0, "owner": self},
@@ -1887,10 +1915,10 @@ class VirusBoss(Object):
                     {"num": 4, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": 2*self.tileh}
                 ])
             elif chunk == 4:
-                self.create_level_chunk(5, 0, 0, self.pillar_chunk(0, 0, 5, 9, 0))
-                self.create_level_chunk(5, 13, 1, [{"num": 0, "type": OBJTYPE_SPIKE, "xrep": 5}])
+                self.create_level_chunk(5, 0, 0, self.pillar_chunk(0, 0, 5 if diff > 1 else 4, 9, 0))
+                self.create_level_chunk(5, 13, 1, [{"num": 0, "type": OBJTYPE_SPIKE, "xrep": 5 if diff > 1 else 4}])
                 self.create_level_chunk(11, 13, 1, [
-                    {"num": 0, "type": OBJTYPE_SPIKE, "x": (2-.5*diff)*self.tilew, "y": 0},
+                    {"num": 0, "type": OBJTYPE_SPIKE, "x": (1.5 if diff > 1 else 1)*self.tilew, "y": 0},
                     {"num": 1, "type": OBJTYPE_BEAM, "x": 0, "y": self.tileh, "xrep": 3}
                 ])
                 self.create_level_chunk(16, 4, 1, [
@@ -1916,7 +1944,7 @@ class VirusBoss(Object):
                     {"num": 1, "type": OBJTYPE_SPIKE, "x": 0, "y": 2*self.tileh},
                     {"num": 3, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": 2*self.tileh, "yrep": 6},
                     {"num": 6, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": 8*self.tileh},
-                    {"num": 3, "type": OBJTYPE_SPIKE, "x": self.tilew, "y": 9*self.tileh}
+                    {"num": 3, "type": OBJTYPE_SPIKE, "x": self.tilew, "y": 9*self.tileh, "xrep": 1 if diff > 0 else 0}
                 ])
                 self.create_level_chunk(23, 12, 1, [
                     {"num": 0, "type": OBJTYPE_BLOCK, "x": 0, "y": 0},
@@ -1975,7 +2003,6 @@ class VirusBoss(Object):
                     {"num": 6, "type": OBJTYPE_BLOCK, "x": 0, "y": 0},
                     {"num": 10, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": 0},
                     {"num": 4, "type": OBJTYPE_BLOCK, "x": 2*self.tilew, "y": 0, "xrep": 2},
-                    {"num": 1, "type": OBJTYPE_SPIKE, "x": 0, "y": self.tileh},
                     {"num": 6, "type": OBJTYPE_BLOCK, "x": self.tilew, "y": self.tileh},
                     {"num": 10, "type": OBJTYPE_BLOCK, "x": 2*self.tilew, "y": self.tileh},
                     {"num": 4, "type": OBJTYPE_BLOCK, "x": 3*self.tilew, "y": self.tileh, "yrep": 3},
@@ -2092,12 +2119,7 @@ class VirusBoss(Object):
                 self.gc.play_sound("explosion")
             elif self.anim_frame == 260:
                 self.self_destruct = True
-                skip = GlobalSave.unlock_skip
-                if not self.gc.difficulty in GlobalSave.completed_difficulties:
-                    GlobalSave.completed_difficulties.append(self.gc.difficulty)
-                    GlobalSave.update_extras()
-                    GlobalSave.save()
-                self.gc.defeat_virus(skip)
+                self.gc.defeat_virus()
         elif self.attack in (
             self.ATTACK_RED_GLITCH_HORIZONTAL,
             self.ATTACK_BLUE_GLITCH_HORIZONTAL,

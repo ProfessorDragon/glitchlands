@@ -8,7 +8,6 @@ import errno
 import struct
 from collections import namedtuple
 import threading
-import time
 import select
 import queue
 

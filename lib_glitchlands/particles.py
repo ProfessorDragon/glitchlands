@@ -21,6 +21,7 @@ class Particle:
         self.x_speed_decay = 1
         self.y_speed_decay = 1
         self.opacity = 1
+        self.show_low_detail = False
         self.self_destruct = False
 
     def update(self):
@@ -97,7 +98,8 @@ class ShieldBreakParticle(Particle):
         if self.opacity <= 0: self.self_destruct = True
 
 class ParticleSpawner:
-    def __init__(self, gc, names, configs, class_=Particle, count=1, xofs=4, yofs=4, velofs=2, dirofs=15, hflip=False, vflip=False):
+    def __init__(self, gc, names, configs, class_=Particle, count=1, xofs=4, yofs=4, velofs=2, dirofs=15,
+                 hflip=False, vflip=False, show_low_detail=False):
         self.gc = gc
         self.particles = []
         if count < 1 or len(names) < 1 or len(configs) < 1: return
@@ -119,6 +121,7 @@ class ParticleSpawner:
                     part.yv = velmag*math.sin(math.radians(veldir))
                     if hflip: part.xv *= -1
                     if vflip: part.yv *= -1
+                    part.show_low_detail = show_low_detail
                     self.particles.append(part)
                     
     def spawn(self):
