@@ -588,7 +588,8 @@ class GameController(GameControllerBase):
                     cx = (pos[1]+world_data.get("xofs", 0))*level_size[0]+self.game_width//2
                     cy = (pos[2]+world_data.get("yofs", 0))*level_size[1]+self.game_height//2
                     ui.create_graphic(self, surface, cx=cx, cy=cy)
-                    if tile_data.get("icon_name"): # level icon
+                    if tile_data.get("icon_name") and (tile_data.get("icon_hide_level") is None or \
+                            tuple(tile_data["icon_hide_level"]) not in visited): # level icon
                         icon_pos = tile_data.get("icon_pos", [0, 0])
                         icon_x, icon_y = cx+icon_pos[0]*(level_size[0]//3), cy+icon_pos[1]*(level_size[1]//4)
                         level_icons.append((icon_key[tile_data["icon_name"]], icon_x, icon_y))
@@ -902,6 +903,9 @@ class GameController(GameControllerBase):
                                 return
                         elif self.selection.menu in (MENU_CREDITS, MENU_COMPLETION):
                             self.launch_selection()
+                        elif self.selection.menu == MENU_SLOT_SELECT and self.selection.submenu != SUBMENU_SLOT_SELECT:
+                            self.set_menu(MENU_SLOT_SELECT)
+                            self.play_sound("return")
                         else:
                             self.set_menu(self.selection.prev_menu)
                             self.play_sound("return")

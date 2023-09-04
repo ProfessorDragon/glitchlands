@@ -37,7 +37,7 @@ class Particle:
         if self.opacity < 1:
             im.set_alpha(self.opacity*255)
         if self.size != 1:
-            im = pygame.transform.scale(im, (self.rect.w*self.size, self.rect.h*self.size))
+            im = pygame.transform.scale(im, (int(self.rect.w*self.size), int(self.rect.h*self.size)))
             x += (self.rect.w-self.rect.w*self.size)//2
             y += (self.rect.h-self.rect.h*self.size)//2
         return self.gc.screen.blit(im, (x, y))
