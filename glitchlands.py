@@ -1232,7 +1232,7 @@ class GameController(GameControllerBase):
             self.create_level(self.level_left, -1)
         self.load_music()
         if self.background.num != self.level.background:
-            self.background.change_to(self.level.background, side=-1 if level_loaded and not Settings.low_detail else 0)
+            self.background.change_to(self.level.background, side=-1 if level_loaded else 0)
             self.force_full_refresh = True
         self.set_checkpoint(bottom=self.level.checkpoint_positions[2], right=self.game_width)
         self.player.update_hitbox()
@@ -1266,7 +1266,7 @@ class GameController(GameControllerBase):
             self.create_level(self.level_right, 1)
         self.load_music()
         if self.background.num != self.level.background:
-            self.background.change_to(self.level.background, side=1 if level_loaded and not Settings.low_detail else 0)
+            self.background.change_to(self.level.background, side=1 if level_loaded else 0)
             self.force_full_refresh = True
         self.set_checkpoint(bottom=self.level.checkpoint_positions[0], left=0)
     

@@ -179,7 +179,7 @@ class Background:
         self.prev_num = self.num
         self.num = num
         self.randomize_direction()
-        if Settings.reduce_motion or side == 0:
+        if side == 0 or Settings.reduce_motion or Settings.low_detail or RASPBERRY_PI:
             self.transition_timer = 0
             self.generate_image()
         else:
