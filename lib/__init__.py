@@ -96,7 +96,7 @@ class Input(object):
                 try:
                     import psutil
                 except ImportError:
-                    print("Memory usage unavailable")
+                    pass
                 else:
                     Input._psutil = psutil
 

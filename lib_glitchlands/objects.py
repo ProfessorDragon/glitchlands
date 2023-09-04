@@ -1,4 +1,6 @@
 import math, random
+from functools import cmp_to_key
+
 import pygame
 
 from lib import*
@@ -1577,6 +1579,13 @@ class VirusBoss(Object):
                 })
             )
 
+    def sort_last(self):
+        def sort(a, b):
+            if self == a: return 1
+            if self == b: return -1
+            return 0
+        self.gc.objects_collide.sort(key=cmp_to_key(sort))
+
     def create_level_chunk(self, x, y, direction, configs):
         w = max(config.get("x", 0)//self.tilew+config.get("xrep", 1) for config in configs)
         drop_delay = (self.gc.game_width/self.tilew-(x+w if self.facing_right else x))*5+30
@@ -2016,6 +2025,7 @@ class VirusBoss(Object):
                     {"num": 1, "type": OBJTYPE_SPIKE, "x": 3*self.tilew, "y": 8*self.tileh}
                 ])
                 self.create_level_chunk(22, 13, 1, [{"num": 0, "type": OBJTYPE_HITBUTTON, "owner": self}])
+            self.sort_last()
             self.gc.sort_hazards()
             self.gc.sort_layers()
         elif attack == self.ATTACK_LEVEL:
@@ -2031,21 +2041,21 @@ class VirusBoss(Object):
         self.hitbox = None
         self.hurtbox = None
         if self.frames is not None:
-            if self.attack in (self.ATTACK_INTRO, self.ATTACK_MAD, self.ATTACK_DEFEAT):
+            if self.attack in (self.ATTACK_INTRO, self.ATTACK_MAD, self.ATTACK_DEFEAT): # background attack
                 self.hitbox = self.rect.copy()
                 self.collides = COLLISION_PASS
-            else:
+            else: # horizontal attack
                 self.hitbox = pygame.Rect(
-                    self.rect.x+(48 if self.facing_right else 160), self.rect.y+32,
-                    self.rect.w-160-48, self.rect.h-64
+                    self.rect.x+(48 if self.facing_right else 160), self.rect.y+28,
+                    self.rect.w-160-48, self.rect.h-56
                 )
                 self.hurtbox = pygame.Rect(
                     self.rect.x+(self.rect.w-32-128 if self.facing_right else 32), self.rect.y+self.rect.h//2-60,
                     128, 120
                 )
                 self.collides = COLLISION_SHIELDBREAK
-        elif self.attack == self.ATTACK_TOMBSTONE: self.collides = COLLISION_PASS
-        else: self.collides = COLLISION_NONE
+        elif self.attack == self.ATTACK_TOMBSTONE: self.collides = COLLISION_PASS # tombstone
+        else: self.collides = COLLISION_NONE # offscreen
     
     def hurt(self):
         if self.hurt_timer > 0: return
