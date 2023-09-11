@@ -15,8 +15,18 @@ class Progression:
             "green_glitch",
             "blue_glitch",
             "map",
-            "lightbeam",
+            "lightbeam"
         ]
+        self.upgrade_names = {
+            "jump": "Jump",
+            "double_jump": "Double jump",
+            "speed_boost": "Speed boost",
+            "red_glitch": "Red glitch zones",
+            "green_glitch": "Green glitch zones",
+            "blue_glitch": "Blue glitch zones",
+            "map": "Map",
+            "lightbeam": "Lightbeam"
+        }
         self.jump = True # start with some abilities enabled in world 0
         self.double_jump = True
         self.speed_boost = True
@@ -407,6 +417,7 @@ class Player(pygame.sprite.Sprite):
                 break
             if obj.collides == COLLISION_SHIELDBREAK:
                 self.shieldbreak()
+                if self.freeze_timer != 0: break
             elif obj.collides == COLLISION_BLOCK:
                 if dx < 0: self.collide_left(obj.hitbox.right)
                 elif dx > 0: self.collide_right(obj.hitbox.left)
@@ -438,6 +449,7 @@ class Player(pygame.sprite.Sprite):
                 break
             if obj.collides == COLLISION_SHIELDBREAK:
                 self.shieldbreak()
+                if self.freeze_timer != 0: break
             elif obj.collides == COLLISION_BLOCK:
                 if dy < 0: self.collide_top(obj.hitbox.bottom)
                 elif dy > 0: self.collide_bottom(obj.hitbox.top)
@@ -532,13 +544,15 @@ class Player(pygame.sprite.Sprite):
         im = sheet.get(
             (self.anim_frame//self.anim_delay)%sheet.width,
             hflip=not self.facing_right, vflip=self.upside_down
-        ).copy()
+        )
         if self.freeze_timer != 0:
+            im = im.copy()
             if self.anim == "death": im.set_alpha(self.freeze_timer/15*255)
             elif self.anim == "revive": im.set_alpha((1-self.freeze_timer/7)*255)
             elif self.anim == "teleport_in": im.set_alpha(self.freeze_timer/(10 if self.fast_teleport else 20)*255)
             elif self.anim == "teleport_out": im.set_alpha((1-self.freeze_timer/(10 if self.fast_teleport else 20))*255)
         if self.hurt_timer > 52:
+            im = im.copy()
             amount = (self.hurt_timer-52)/8*128
             im.fill((amount, amount, amount, 0), special_flags=pygame.BLEND_RGBA_ADD)
         return self.gc.screen.blit(im, (self.x-self.gc.xscroll, self.y))

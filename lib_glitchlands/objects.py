@@ -96,8 +96,9 @@ class Object(pygame.sprite.Sprite):
     def not_loaded(self, x_threshold=False, distance_threshold=False):
         if self.loaded: return False # not loaded previously
         if self.level.level_pos != self.gc.level.level_pos: return True # on the same level
-        if distance_threshold and not \
-                self.rect.colliderect(self.gc.player.hitbox.inflate(self.gc.game_width//2, self.gc.game_height//2)):
+        if distance_threshold and not self.rect.colliderect(
+                self.gc.player.hitbox.inflate(int(self.gc.game_width*.7), int(self.gc.game_height*.7))
+            ):
             return True
         if x_threshold and not \
                 (self.gc.scroll_bounds//2 < self.gc.player.hitbox.centerx < self.gc.game_width-self.gc.scroll_bounds//2):
@@ -211,7 +212,9 @@ class Block(Object):
         if self.fake:
             self.collides = COLLISION_NONE
     def generate_glitch_image(self):
-        if self.image is None: return
+        if self.image is None or Settings.low_detail:
+            self.glitch_image = None
+            return
         self.glitch_image = self.image.copy()
         terrain = self.gc.assets.terrain[-self.type]
         if len(terrain) > 1:
@@ -244,10 +247,11 @@ class Block(Object):
         if self.image is None or (self.anim_duration > 0 and not self.loaded): return
         if self.anim_frame//self.anim_delay > self.anim_duration-1: im = self.image
         else: im = self.frames[self.anim_frame//self.anim_delay+self.anim_duration*self.num]
-        glitch_reduction = self.xrep*self.yrep
-        if self.fake: glitch_reduction *= 20
-        if self.gc.glitch_chance >= 0 and random.randint(0, self.gc.glitch_chance)//glitch_reduction == 0:
-            im = self.glitch_image
+        if self.gc.glitch_chance >= 0 and self.glitch_image is not None:
+            glitch_reduction = self.xrep*self.yrep
+            if self.fake: glitch_reduction *= 20
+            if random.randint(0, self.gc.glitch_chance)//glitch_reduction == 0:
+                im = self.glitch_image
         return self.blit_image(im, self.rect)
 
 class FontCharacter(Object):
@@ -410,9 +414,11 @@ class AreaTrigger(Activateable):
                 self.gc.glitch_chance = 3000
             elif self.level.level_pos[0] == 2:
                 self.gc.glitch_chance = 2000
+                self.gc.add_split("World 2")
             elif self.level.level_pos[0] == 3:
                 self.gc.glitch_chance = 1000
                 self.gc.visited_final_world = True
+                self.gc.add_split("World 3")
         elif self.num == 1: # checkpoint
             if self.gc.player.fall_frame == 0:
                 self.gc.set_checkpoint(bottom=self.rect.bottom, centerx=self.rect.centerx)
@@ -471,6 +477,8 @@ class UpgradeBox(Object):
                 self.gc.player.abilities.enable(self.upgrade_name)
                 self.gc.show_transition(num=1)
                 self.gc.play_sound("upgrade")
+                if self.upgrade_name != "jump":
+                    self.gc.add_split(self.gc.player.abilities.upgrade_names.get(self.upgrade_name))
                 self.gc.set_checkpoint(bypass_rookie=True, bottom=self.rect.bottom, centerx=self.rect.centerx)
     def draw(self):
         upgrade_image = self.upgrade_sheet.get(
@@ -633,15 +641,16 @@ class GlitchZone(Object):
                 self.physics = self.config.get("physics", {})
     def transparent_rect(self, width, height, opacity):
         im = Assets.sized_surface(width, height)
-        im.fill(self.color)
-        im.set_alpha(opacity*255)
+        im.fill(self.color+(opacity*255,))
         return im
     def generate_image(self):
         im = Assets.sized_surface(self.width, self.height)
         for x in range(self.xrep):
             for y in range(self.yrep):
                 opacity = random.random()
-                if not Settings.enable_transparency and opacity < .5: continue
+                if not Settings.enable_transparency:
+                    if opacity < .5: continue
+                    opacity = 1
                 im.blit(
                     self.transparent_rect(self.tilew, self.tileh, opacity),
                     (x*self.tilew,  y*self.tileh)
@@ -768,7 +777,7 @@ class Button(Activateable):
         self.update_hitbox()
         self.collides = COLLISION_PASS
         self.timer = 0
-        self.timer_duration = [3, 4, 6][self.num]*(60 if self.gc.difficulty > 0 else 75)
+        self.timer_duration = [3, 4, 6][self.num]*[80, 70, 60][self.gc.difficulty]
     def update_hitbox(self):
         self.hitbox = pygame.Rect(self.rect.x+2, self.y+20, self.rect.w-4, self.rect.h-20)
     def should_trigger(self, obj):
@@ -1006,11 +1015,16 @@ class UpgradeTip(Object):
             self.self_destruct = True
             return
         jump_num = 0 if RASPBERRY_PI else 2
-        self.tip_data = [
-            ["Jump", jump_num], ["Double jump", jump_num, jump_num], ["Run", 3, 4],
-            ["Collide with red\nglitch zones"], ["Teleport with green\nglitch zones"], ["Interact with blue\nglitch zones"],
-            ["View map", 6], ["Use lightbeam\nThe virus' only weakness", 1]
-        ][self.num]
+        self.tip_data = {
+            "jump": ["Jump", jump_num],
+            "double_jump": ["Double jump", jump_num, jump_num],
+            "speed_boost": ["Movement speed\nincreased"],
+            "red_glitch": ["Collide with red\nglitch zones"],
+            "green_glitch": ["Teleport with green\nglitch zones"],
+            "blue_glitch": ["Interact with blue\nglitch zones"],
+            "map": ["View map", 6]
+        }.get(self.upgrade_name)
+        if self.tip_data is None: return
         self.image = generate_tip_image(self.gc, self.tip_data[0], *self.tip_data[1:])
         self.rect = pygame.Rect(self.x+self.tilew-self.image.get_width()//2, self.y, self.image.get_width(), self.image.get_height())
         self.update_hitbox()
@@ -1280,7 +1294,14 @@ class Npc(Activateable):
         self.gc.play_sound("pause")
     def dialogue_finished(self):
         self.gc.visited_npcs.add((self.num, *self.level.level_pos))
-        self.gc.crystal_count += sum(slide.crystals for slide in self.gc.npc_dialogue.slides)
+        crystals = sum(slide.crystals for slide in self.gc.npc_dialogue.slides)
+        self.gc.crystal_count += crystals
+        if crystals == 1:
+            self.gc.add_split(f"Crystal {self.gc.crystal_count}")
+        elif crystals == 2:
+            self.gc.add_split(f"Crystals {self.gc.crystal_count-1} and {self.gc.crystal_count}")
+        elif crystals > 2:
+            self.gc.add_split(f"Crystals {', '.join([str(self.gc.crystal_count-crystals+n+1) for n in range(crystals)])}")
     def collides_horizontal(self, entity, dx=0):
         if not isinstance(entity, player.Player):
             return False
@@ -1523,7 +1544,10 @@ class VirusBoss(Object):
             self.level_order[atk] = levels[i]
         self.arena_barrier = None
         self.boss_bar = None
-        self.set_attack(self.ATTACK_TOMBSTONE if self.gc.defeated_virus else self.ATTACK_INTRO)
+        if self.level.level_pos == self.gc.level.level_pos and not self.level.level_pos in self.gc.visited_levels:
+            self.gc.add_split("Final boss")
+            self.gc.append_visited()
+        self.set_attack(self.ATTACK_INTRO if self.gc.completed_time is None else self.ATTACK_TOMBSTONE)
     
     def spawn_explode_particles(self):
         particles.ParticleSpawner(

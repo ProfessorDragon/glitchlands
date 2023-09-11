@@ -7,7 +7,7 @@ from lib_glitchlands import*
 from lib_glitchlands import player, objects, ui, particles
 
 import pygame
-pygame.mixer.pre_init(44100, -16, 2, 512)
+pygame.mixer.pre_init(44100, -16, 2, 1024)
 pygame.init()
 try: from PygameShader import shader
 except ImportError: shader = None
@@ -150,8 +150,11 @@ class AssetLoader:
             text = self.font_small.render(f"Slot {slot+1}")
             im.blit(text, (cx-text.get_width()//2, 10))
         if save_data is not None:
-            if save_data.get("defeated_virus", False):
-                im.blit(self.ui.get("menu_icons")[0], (im.get_width()-10-18, 10))
+            icon = None
+            if save_data.get("completed_time") is not None:
+                icon = 4 if save_data["completed_time"] == GlobalSave.best_time and GlobalSave.speedrun_mode else 5
+            if icon is not None:
+                im.blit(self.ui.get("menu_icons")[icon], (im.get_width()-10-18, 10))
             text = self.font_small.render(["Rookie", "Normal", "Master"][save_data.get("difficulty", 0)])
             im.blit(text, (cx-text.get_width()//2, 42))
             hours, rem = divmod(save_data.get("elapsed_time", 0), 3600)
@@ -189,9 +192,9 @@ class GameController(GameControllerBase):
         for drive in ("U",):
             if os.path.exists(drive+":\\"): self.save_base = drive+":\\glitchlands_save"
         GlobalSave.save_file = os.path.join(self.save_base, "glitchlands", "global.json")
-        GlobalSave.load_else_preset("unlock" if RASPBERRY_PI else "none")
+        GlobalSave.load()
         Settings.save_file = os.path.join(self.save_base, "settings.json")
-        Settings.load_else_preset("pi" if RASPBERRY_PI else "medium")
+        Settings.load_else_preset()
         self.shown_settings = []
         if not RASPBERRY_PI: self.shown_settings.append("windowed")
         self.shown_settings.extend(["show_fps", "show_hitboxes"])
@@ -203,13 +206,15 @@ class GameController(GameControllerBase):
                 print("PygameShader module is required to enable shaders")
         else:
             self.shown_settings.append("enable_shaders")
+        if GlobalSave.unlock_speedrun:
+            self.shown_settings.append("speedrun_mode")
 
     def init_display(self):
         super().init_display()
         pygame.display.set_caption("Glitchlands")
         pygame.display.set_icon(self.assets.preload.get("icon"))
 
-    def init_level(self):
+    def init_level(self, begin=True):
         self.in_game = True
         self.frame = 0
         self.load_level_full((0, 0, 0)) # load level data
@@ -224,12 +229,14 @@ class GameController(GameControllerBase):
         self.visited_npcs = set()
         self.visited_one_ways = set()
         self.visited_final_world = False
-        self.defeated_virus = False
         self.crystal_count, self.max_crystal_count, self.crystal_requirements = 0, 12, [5, 4, 3]
         self.death_count = 0
         self.elapsed_time = 0
-        self.disable_pause()
-        self.restore_progress() # restore save
+        self.completed_time = None
+        self.splits = []
+        if begin:
+            self.disable_pause()
+            self.restore_progress()
 
     def init(self):
         self.assets = AssetLoader()
@@ -255,12 +262,13 @@ class GameController(GameControllerBase):
         if fn is None: return
         save_data = {
             "checkpoint": self.checkpoint.to_json(),
-            "abilities": self.player.abilities.to_json()
+            "abilities": self.player.abilities.to_json(),
+            "splits": [[split[0], split[1]] for split in self.splits]
         }
         for attr in ("visited_levels", "visited_npcs", "visited_one_ways"):
             save_data[attr] = list(getattr(self, attr))
-        for attr in ("visited_final_world", "defeated_virus", "crystal_count", "glitch_chance", "difficulty",
-                     "death_count", "elapsed_time"):
+        for attr in ("visited_final_world", "crystal_count", "glitch_chance", "difficulty",
+                     "death_count", "elapsed_time", "completed_time"):
             save_data[attr] = getattr(self, attr)
         os.makedirs(os.path.dirname(fn), exist_ok=True)
         with open(fn, "w") as f:
@@ -278,9 +286,10 @@ class GameController(GameControllerBase):
         self.player.abilities.load_json(save_data["abilities"])
         for attr in ("visited_levels", "visited_npcs", "visited_one_ways"):
             setattr(self, attr, set(tuple(pos) for pos in save_data.get(attr, getattr(self, attr))))
-        for attr in ("visited_final_world", "defeated_virus", "crystal_count", "glitch_chance", "difficulty",
-                     "death_count", "elapsed_time"):
+        for attr in ("visited_final_world", "crystal_count", "glitch_chance", "difficulty",
+                     "death_count", "elapsed_time", "completed_time"):
             setattr(self, attr, save_data.get(attr, getattr(self, attr)))
+        self.splits = [(split[0], split[1], self.format_elapsed(split[1])) for split in save_data.get("splits", [])]
         self.restore_checkpoint(initial=True)
     
     def restore_checkpoint(self, cp=None, initial=False):
@@ -292,7 +301,6 @@ class GameController(GameControllerBase):
             else:
                 self.xscroll = 0
                 self.xscroll_target = 0
-            self.force_full_refresh = True
             self.append_visited(cp.level_pos, only_next=True)
             self.load_level_full(cp.level_pos)
             self.create_levels_auto(clear=True)
@@ -311,19 +319,38 @@ class GameController(GameControllerBase):
         if slot is None: slot = self.save_slot
         if slot < 0: return None
         return os.path.join(self.save_base, "glitchlands", f"slot{slot}.json")
+    
+    def skip_intro(self):
+        self.player.abilities.set_all(False)
+        self.glitch_chance = 3000
+        self.checkpoint = Checkpoint((1, 0, 0), centerx=self.game_width//2, top=0, facing_right=False)
+        self.restore_checkpoint(initial=True)
 
     def defeat_virus(self):
-        first = len(GlobalSave.completed_difficulties) == 0
+        elapsed = self.get_elapsed_time()
+        if self.completed_time is None:
+            self.completed_time = elapsed
+            self.add_split("Game completed")
+        unlock = SUBMENU_NO_UNLOCK
         if not self.difficulty in GlobalSave.completed_difficulties:
             GlobalSave.completed_difficulties.append(self.difficulty)
-            GlobalSave.update_extras()
-            GlobalSave.save()
-        self.defeated_virus = True
+        if GlobalSave.best_time is None or elapsed < GlobalSave.best_time:
+            GlobalSave.best_time = elapsed
+            if GlobalSave.speedrun_mode:
+                unlock = SUBMENU_BEST_TIME
+        if not GlobalSave.unlock_master:
+            unlock = SUBMENU_UNLOCK_MASTER
+            GlobalSave.unlock_master = True
+        elif not GlobalSave.unlock_speedrun and elapsed < 30*60:
+            unlock = SUBMENU_UNLOCK_SPEEDRUN
+            GlobalSave.unlock_speedrun = True
+            self.shown_settings.append("speedrun_mode")
+        GlobalSave.save()
         self.glitch_chance = -1
         self.save_progress()
         self.in_game = False
         self.level = None
-        self.set_menu(MENU_COMPLETION, SUBMENU_UNLOCK_MASTER if first else SUBMENU_NO_UNLOCK_MASTER)
+        self.set_menu(MENU_COMPLETION, unlock)
 
     def load_level_full(self, pos):
         self.level = LevelData(pos)
@@ -383,6 +410,23 @@ class GameController(GameControllerBase):
         sound = self.assets.sounds.get(name)
         sound.set_volume(Settings.volume_sfx*volume)
         sound.play()
+    
+    def get_elapsed_time(self):
+        if self.selection.menu != MENU_IN_GAME: return self.elapsed_time
+        return self.elapsed_time+time.perf_counter()-self.elapsed_time_start
+    
+    def add_split(self, name=None):
+        if name is None: name = "Unknown"
+        elapsed = self.get_elapsed_time()
+        self.splits.append((name, elapsed, self.format_elapsed(elapsed)))
+    
+    def format_elapsed(self, elapsed):
+        hours, rem = divmod(elapsed, 3600)
+        minutes, rem = divmod(rem, 60)
+        seconds, milliseconds = divmod(rem, 1)
+        formatted = "{:0>2}:{:0>2}.{:0>2}".format(int(minutes), int(seconds), int(milliseconds*100))
+        if hours > 0: formatted = "{:0>2}:".format(int(hours))+formatted
+        return formatted
 
     def get_block_objects(self):
         return self.objects_nocollide+self.objects_collide
@@ -398,13 +442,11 @@ class GameController(GameControllerBase):
         self.background.generate_pause_image()
         self.set_menu(menu)
         if menu in (MENU_PAUSED, MENU_MAP): self.play_sound("pause")
-        self.force_full_refresh = True
     
     def disable_pause(self):
         if self.selection.menu in (MENU_PAUSED, MENU_MAP): self.play_sound("unpause")
         self.elapsed_time_start = time.perf_counter()
         self.set_menu(MENU_IN_GAME)
-        self.force_full_refresh = True
     
     def adjust_music_volume(self, prev, cur):
         if cur == 0: MusicManager.stop()
@@ -422,19 +464,22 @@ class GameController(GameControllerBase):
             nums = [0, 2, 3]
             for i, num in enumerate(nums):
                 ui.create_button(self, buttons[num], (0, i), cy=320+i*40)
-            ui.create_button(self, buttons_small[0], (0, len(nums)), cx=self.game_width-30, cy=25)
+            ui.create_button(self, buttons_small[0], (0, len(nums)), cx=self.game_width-30, cy=25, hit_inflate=(12, 12))
             mx = [0, len(nums)+1]
             if not RASPBERRY_PI:
-                ui.create_button(self, buttons_small[1], (0, len(nums)+1), cx=self.game_width-30, cy=self.game_height-25)
+                ui.create_button(self, buttons_small[1], (0, len(nums)+1), hit_inflate=(12, 12),
+                                 cx=self.game_width-30, cy=self.game_height-25)
                 mx[1] += 1
             self.load_music()
         elif self.in_game and menu == MENU_PAUSED:
-            ui.create_text(self, "Paused", cy=160)
             nums = [10, 2, 11]
-            if GlobalSave.unlock_skip and self.level.level_pos[0] == 0 and all(pos[0] == 0 for pos in self.visited_levels):
+            if GlobalSave.unlock_master and self.level.level_pos[0] == 0 and all(pos[0] == 0 for pos in self.visited_levels):
                 nums.insert(-1, 12)
+            elif GlobalSave.speedrun_mode:
+                nums.insert(-1, 15)
+            ui.create_text(self, "Paused", cy=160)
             for i, num in enumerate(nums):
-                ui.create_button(self, buttons[num], (0, i), cy=230+i*40)
+                ui.create_button(self, buttons[num], (0, i), cy=220+i*40)
             mx = [0, len(nums)]
         elif menu == MENU_SLOT_SELECT:
             if submenu in (SUBMENU_SLOT_SELECT, SUBMENU_COPY_SLOT):
@@ -442,11 +487,13 @@ class GameController(GameControllerBase):
                     ui.create_text(self, "Select save file", cy=130)
                 else:
                     ui.create_text(self, "Select destination", cy=130)
-                nums = range(4)
+                nums = range(4) if self.save_slot < 4 else range(4, 8)
                 for i, num in enumerate(nums):
                     im = self.assets.save_slot_image(num, self.get_save_file(num))
-                    ui.create_button(self, im, (i, 0), cx=400+(-(len(nums)-1)/2+i)*198)
-                ui.create_button(self, buttons[1], [(n, 1) for n in range(4)], cy=390)
+                    ui.create_button(self, im, (i, 0), cx=self.game_width//2+(-(len(nums)-1)/2+i)*198, cy=250)
+                ui.create_button(self, buttons[1], [(0, 1), (1, 1)], cx=self.game_width//2-99, cy=370)
+                ui.create_button(self, buttons[19 if self.save_slot < 4 else 18], [(2, 1), (3, 1)],
+                                 cx=self.game_width//2+99, cy=370)
                 mx = [len(nums), 2]
             elif submenu in (SUBMENU_SLOT_ACTION, SUBMENU_DIFFICULTY_SELECT):
                 if submenu == SUBMENU_SLOT_ACTION:
@@ -461,21 +508,28 @@ class GameController(GameControllerBase):
                 ui.create_button(self, buttons[nums[2]], (1, 0), cx=500, cy=360)
                 ui.create_button(self, buttons[nums[3]], (1, 1), cx=500, cy=400)
                 mx = [2, 2]
+            elif submenu == SUBMENU_CONFIRM_DELETE:
+                ui.create_text(self, f"Delete slot {self.save_slot+1}?", cy=200)
+                ui.create_button(self, buttons[17], (0, 0), cx=self.game_width//2-110, cy=270)
+                ui.create_button(self, buttons[16], (1, 0), cx=self.game_width//2+110, cy=270)
+                mx = [2, 1]
         elif menu == MENU_SETTINGS:
             switch = self.assets.ui.get("switch")
             ui.create_text(self, "Settings", cy=70)
-            x = self.game_width//2
+            x, y = self.game_width//2, 130 if len(self.shown_settings) > 7 else 150
             for i, attr in enumerate(self.shown_settings):
-                text = ui.create_text(self, Settings.display_names[attr], cy=150+i*40)
+                cls = GlobalSave if attr in GlobalSave.all else Settings # i love oop
+                text = ui.create_text(self, cls.display_names.get(attr, ""), cy=y)
                 text.rect.right = x-20
-                obj = ui.create_button(self, switch[1 if Settings.get(attr) else 2], (0, i), cy=150+i*40)
+                obj = ui.create_button(self, switch[1 if cls.get(attr) else 2], (0, i), cy=y)
                 obj.rect.left = x
+                y += 40
             x += 270
-            ui.create_text(self, "Music", cx=x, cy=210)
-            ui.create_slider(self, "volume_music", 1 if RASPBERRY_PI else 0.5, (0, len(self.shown_settings)), cx=x, cy=235,
+            ui.create_text(self, "Music", cx=x, cy=190)
+            ui.create_slider(self, "volume_music", 1 if RASPBERRY_PI else 0.5, (0, len(self.shown_settings)), cx=x, cy=215,
                              callback=self.adjust_music_volume)
-            ui.create_text(self, "SFX", cx=x, cy=275)
-            ui.create_slider(self, "volume_sfx", 1 if RASPBERRY_PI else 0.5, (0, len(self.shown_settings)+1), cx=x, cy=300)
+            ui.create_text(self, "SFX", cx=x, cy=270)
+            ui.create_slider(self, "volume_sfx", 1 if RASPBERRY_PI else 0.5, (0, len(self.shown_settings)+1), cx=x, cy=295)
             ui.create_button(self, buttons[1], (0, len(self.shown_settings)+2), cx=x, cy=390)
             mx = [0, len(self.shown_settings)+3]
         elif menu in (MENU_CREDITS, MENU_COMPLETION):
@@ -499,7 +553,9 @@ class GameController(GameControllerBase):
                 text += "{:0>2}:{:0>2}:{:0>2}".format(int(hours), int(minutes), int(seconds))
                 text += f"  Deaths: {self.death_count}\n\n"
                 if submenu == SUBMENU_UNLOCK_MASTER: text += "Master difficulty has\nbeen unlocked"
-                elif submenu == SUBMENU_NO_UNLOCK_MASTER: text += "Press any button to continue"
+                elif submenu == SUBMENU_UNLOCK_SPEEDRUN: text += "Speedrun mode has been\nunlocked"
+                elif submenu == SUBMENU_BEST_TIME: text += "New personal best!"
+                else: text += "Press any button to continue"
                 ui.create_text(self, text, cy=340)
             self.selection.disable_mouse()
             self.load_music()
@@ -618,7 +674,7 @@ class GameController(GameControllerBase):
             for x1, y1, x2, y2 in teleporter_lines:
                 surface = Assets.sized_surface(abs(x2-x1), abs(y2-y1))
                 pygame.draw.line(surface, WHITE, (x1-min(x1, x2), y1-min(y1, y2)), (x2-min(x1, x2), y2-min(y1, y2)), 3)
-                surface.set_alpha(64)
+                if Settings.enable_transparency: surface.set_alpha(64)
                 line = ui.create_graphic(self, surface, cx=(x1+x2)//2, cy=(y1+y2)//2)
                 line.hide_ok = True
             for num, x, y in level_icons[::-1]:
@@ -633,16 +689,16 @@ class GameController(GameControllerBase):
             text.rect.left = 44
             text.fixed = text.hide_ok = True
             y += 38
-            if self.crystal_count > 0:
+            if self.crystal_count > 0: # crystal count
                 graphic = ui.create_graphic(self, self.assets.ui.get("crystal_counter")[1], cx=34, cy=self.game_height-y)
                 graphic.fixed = graphic.hide_ok = True
-                if self.defeated_virus: total = self.max_crystal_count
+                if self.completed_time is not None: total = self.max_crystal_count
                 else: total = self.crystal_requirements[self.difficulty]
                 text = ui.create_text(self, f"{self.crystal_count}/{total}", cy=self.game_height-y)
                 text.rect.left = 48
                 text.fixed = text.hide_ok = True
                 y += 38
-            if self.defeated_virus:
+            if self.completed_time is not None: # map completion
                 graphic = ui.create_graphic(self, self.assets.ui.get("crystal_counter")[2], cx=34, cy=self.game_height-y)
                 graphic.fixed = graphic.hide_ok = True
                 text = ui.create_text(self, str(math.floor(visited_levels/total_levels*100))+"%", cy=self.game_height-y)
@@ -650,7 +706,13 @@ class GameController(GameControllerBase):
                 text.fixed = text.hide_ok = True
                 y += 38
             scrollable = True
+        elif menu == MENU_CONFIRM_RESET:
+            ui.create_text(self, f"Reset slot {self.save_slot+1}?", cy=200)
+            ui.create_button(self, buttons[17], (0, 0), cx=self.game_width//2-110, cy=270)
+            ui.create_button(self, buttons[16], (1, 0), cx=self.game_width//2+110, cy=270)
+            mx = [2, 1]
         self.selection.set(idx, mx, menu, submenu)
+        self.selection.initial = idx
         if scrollable:
             self.selection.scrollable = True
             self.update_scrolling_menu()
@@ -679,27 +741,30 @@ class GameController(GameControllerBase):
             return
         elif sel.menu == MENU_SLOT_SELECT:
             if sel.submenu == SUBMENU_SLOT_SELECT:
-                if sel.y == 0:
-                    self.save_slot = sel.x
+                if sel.y == 0: # select slot
+                    self.save_slot = sel.x if self.save_slot < 4 else sel.x+4
                     self.set_menu(sel.menu,
                         SUBMENU_SLOT_ACTION if os.path.isfile(self.get_save_file()) else SUBMENU_DIFFICULTY_SELECT
                     )
-                else:
+                elif sel.x in (0, 1): # back
                     self.set_menu(sel.prev_menu)
                     sound = "return"
+                elif sel.x in (2, 3): # more slots
+                    self.save_slot = (self.save_slot+4)%8
+                    self.set_menu(sel.menu, sel.submenu, sel.idx)
             elif sel.submenu in (SUBMENU_SLOT_ACTION, SUBMENU_DIFFICULTY_SELECT):
                 if sel.idx == (0, 1): # back
-                    self.set_menu(sel.menu, SUBMENU_SLOT_SELECT, (self.save_slot, 0))
+                    self.set_menu(sel.menu, SUBMENU_SLOT_SELECT, (self.save_slot%4, 0))
                     sound = "return"
                 elif sel.submenu == SUBMENU_SLOT_ACTION: # existing save
                     if sel.idx == (0, 0): # load
                         self.should_toggle_in_game = True
                         reset_transition = False
                     elif sel.idx == (1, 0): # copy
-                        self.set_menu(sel.menu, 3)
+                        self.copy_slot = self.save_slot
+                        self.set_menu(sel.menu, SUBMENU_COPY_SLOT, (self.copy_slot%4, 0))
                     elif sel.idx == (1, 1): # delete
-                        os.remove(self.get_save_file())
-                        self.set_menu(sel.menu, 0, (self.save_slot, 0))
+                        self.set_menu(sel.menu, SUBMENU_CONFIRM_DELETE)
                 else: # start new game
                     if sel.x == 0: self.difficulty = 0 # rookie
                     elif sel.y == 0: self.difficulty = 1 # normal
@@ -709,10 +774,24 @@ class GameController(GameControllerBase):
                     reset_transition = False
             elif sel.submenu == SUBMENU_COPY_SLOT:
                 if sel.y == 0:
-                    shutil.copy(self.get_save_file(), self.get_save_file(sel.x))
-                    self.set_menu(sel.menu, SUBMENU_SLOT_SELECT)
+                    if self.save_slot < 4: target = sel.x
+                    else: target = sel.x+4
+                    if self.copy_slot != target:
+                        shutil.copy(self.get_save_file(self.copy_slot), self.get_save_file(target))
+                    self.set_menu(sel.menu, SUBMENU_SLOT_SELECT, sel.idx)
+                    del self.copy_slot
+                elif sel.x in (0, 1): # back
+                    self.set_menu(sel.menu, SUBMENU_SLOT_SELECT, sel.idx)
+                    sound = "return"
+                elif sel.x in (2, 3): # more slots
+                    self.save_slot = (self.save_slot+4)%8
+                    self.set_menu(sel.menu, sel.submenu, sel.idx)
+            elif sel.submenu == SUBMENU_CONFIRM_DELETE:
+                if sel.x == 1:
+                    os.remove(self.get_save_file())
+                    self.set_menu(sel.menu, SUBMENU_SLOT_SELECT, (self.save_slot%4, 0))
                 else:
-                    self.set_menu(sel.menu, SUBMENU_SLOT_ACTION)
+                    self.set_menu(sel.menu, SUBMENU_SLOT_SELECT, (self.save_slot%4, 0))
                     sound = "return"
         elif sel.menu == MENU_SETTINGS:
             if sel.y == sel.ymax-1:
@@ -720,10 +799,11 @@ class GameController(GameControllerBase):
                 sound = "return"
             elif sel.y < len(self.shown_settings):
                 attr = self.shown_settings[sel.y]
-                enabled = not Settings.get(attr)
-                Settings.set(attr, enabled)
+                cls = GlobalSave if attr in GlobalSave.all else Settings
+                enabled = not cls.get(attr)
+                cls.set(attr, enabled)
                 if attr in ("windowed", "vsync"): self.init_display()
-                Settings.save()
+                cls.save()
                 if button is not None:
                     button.update_frames(self.assets.ui.get("switch")[1 if enabled else 2])
         elif sel.menu == MENU_CREDITS:
@@ -743,20 +823,30 @@ class GameController(GameControllerBase):
                 self.level = None
                 self.set_menu(MENU_MAIN)
                 sound = "return"
-            elif sel.y == sel.ymax-2: # skip (if available)
-                self.set_menu(MENU_IN_GAME)
-                self.player.abilities.set_all(False)
-                self.glitch_chance = 3000
-                self.checkpoint = Checkpoint((1, 0, 0), centerx=self.game_width//2, top=0, facing_right=False)
-                self.restore_checkpoint(initial=True)
+            elif sel.y == sel.ymax-2: # skip/reset (if available)
+                if GlobalSave.unlock_master and self.level.level_pos[0] == 0 and all(pos[0] == 0 for pos in self.visited_levels):
+                    self.disable_pause()
+                    self.skip_intro()
+                    sound = None
+                elif GlobalSave.speedrun_mode:
+                    self.set_menu(MENU_CONFIRM_RESET)
         elif sel.menu == MENU_COMPLETION:
             self.set_menu(MENU_CREDITS, SUBMENU_NO_SKIP_CREDITS)
             sound = "select"
+        elif sel.menu == MENU_CONFIRM_RESET:
+            if sel.x == 1:
+                os.remove(self.get_save_file())
+                self.disable_pause()
+                self.load_music("none")
+                self.init_level(begin=False)
+                self.restore_checkpoint(initial=True)
+                sound = None
+            else:
+                self.set_menu(MENU_PAUSED)
         if sound is not None:
             self.play_sound(sound)
         if reset_transition:
             self.transition = None
-        self.force_full_refresh = True
 
     def update_cursor_selection(self, just_pressed=False, touch_pos=None):
         if self.in_game and self.selection.menu == 0: return
@@ -802,7 +892,6 @@ class GameController(GameControllerBase):
                 self.in_game = False
                 self.level = None
                 self.set_menu(self.selection.menu)
-            self.force_full_refresh = True
 
         self.prev_xscroll = self.xscroll
         Input.update(pygame.key.get_pressed())
@@ -816,8 +905,7 @@ class GameController(GameControllerBase):
                     self.selection.direction_time_x, self.selection.direction_time_y = perf, perf
                     self.selection.direction_delay = 0.2
                 self.play_sound("hover")
-            if not self.force_full_refresh:
-                self.selection.disable_mouse()
+            self.selection.disable_mouse()
 
         if self.in_game and self.selection.menu == MENU_IN_GAME:
             self.update_objects(self.glitch_zones)
@@ -872,18 +960,17 @@ class GameController(GameControllerBase):
             for obj in self.ui_objects:
                 obj.update()
             if self.selection.menu == MENU_CREDITS:
-                self.selection.y -= 3 if Input.primary else 1
+                self.selection.y -= 4 if Input.primary else 2
                 if self.selection.y < -740-26*self.assets.ui.get("credits").count("\n"):
                     self.in_game = False
                     self.level = None
                     self.set_menu(MENU_MAIN)
-                    self.force_full_refresh = True
                 else:
                     self.update_scrolling_menu()
             elif self.selection.menu == MENU_MAP:
                 if Input.select and not self.selection.button_pressed:
                     self.disable_pause()
-                elif not Input.select and Input.stick_amount > Input.joystick_threshold:
+                elif not Input.select and Input.stick_amount > Input.joystick_deadzone:
                     amount = (8 if Input.primary else 5)/Input.joystick_radius
                     self.selection.x -= amount*math.cos(math.radians(Input.stick_angle))
                     self.selection.y += amount*math.sin(math.radians(Input.stick_angle))
@@ -904,20 +991,32 @@ class GameController(GameControllerBase):
                         elif self.selection.menu in (MENU_CREDITS, MENU_COMPLETION):
                             self.launch_selection()
                         elif self.selection.menu == MENU_SLOT_SELECT and self.selection.submenu != SUBMENU_SLOT_SELECT:
-                            self.set_menu(MENU_SLOT_SELECT)
+                            if self.selection.submenu == SUBMENU_COPY_SLOT: idx = self.selection.idx
+                            else: idx = (self.save_slot%4, 0)
+                            self.set_menu(MENU_SLOT_SELECT, SUBMENU_SLOT_SELECT, idx)
                             self.play_sound("return")
                         else:
                             self.set_menu(self.selection.prev_menu)
                             self.play_sound("return")
+                if Input.x:
+                    if self.selection.menu == MENU_SLOT_SELECT and \
+                            self.selection.submenu in (SUBMENU_SLOT_SELECT, SUBMENU_COPY_SLOT):
+                        self.save_slot = (self.save_slot+4)%8
+                        self.set_menu(self.selection.menu, self.selection.submenu, self.selection.idx)
+                        self.play_sound("select")
+                    elif self.selection.menu == MENU_MAP:
+                        self.selection.x, self.selection.y = self.selection.initial
+                        self.update_scrolling_menu()
                 if Input.primary or Input.start:
                     self.launch_selection()
             self.selection.button_pressed = Input.any_button
             if Input.any_direction and not self.selection.scrollable:
                 prev_selection = self.selection.idx[:]
                 prev_delay = self.selection.direction_delay
-                button = None
+                button, indexes = None, None
                 for button in self.ui_objects:
                     if isinstance(button, ui.Button) and self.selection.idx in button.indexes:
+                        indexes = button.indexes
                         break
                 if perf-self.selection.direction_time_x > prev_delay:
                     if Input.left:
@@ -925,7 +1024,7 @@ class GameController(GameControllerBase):
                             button.increment(-1)
                             self.selection.direction_delay = 0.1
                         else:
-                            self.selection.increment(-1, 0)
+                            self.selection.increment(-1, 0, indexes)
                             self.selection.direction_delay = 0.2
                         self.selection.direction_time_x = perf
                     if Input.right:
@@ -933,16 +1032,16 @@ class GameController(GameControllerBase):
                             button.increment(1)
                             self.selection.direction_delay = 0.1
                         else:
-                            self.selection.increment(1, 0)
+                            self.selection.increment(1, 0, indexes)
                             self.selection.direction_delay = 0.2
                         self.selection.direction_time_x = perf
                 if perf-self.selection.direction_time_y > prev_delay:
                     if Input.down:
-                        self.selection.increment(0, 1)
+                        self.selection.increment(0, 1, indexes)
                         self.selection.direction_time_y = perf
                         self.selection.direction_delay = 0.2
                     if Input.up:
-                        self.selection.increment(0, -1)
+                        self.selection.increment(0, -1, indexes)
                         self.selection.direction_time_y = perf
                         self.selection.direction_delay = 0.2
                 if prev_selection != self.selection.idx: self.play_sound("hover")
@@ -954,34 +1053,14 @@ class GameController(GameControllerBase):
 
     def draw(self):
         # welcome to my very epic, complicated, and definitely optimized draw code
+        # (it's actually not that bad now that fullscreen_refresh is gone)
         self.rects = []
-        for obj in self.draw_next: # redraw static objects once
-            obj.draw()
-            if Settings.show_hitboxes:
-                obj.draw_hitbox()
-        self.draw_next = []
+        self.background.draw()
         if self.in_game and self.selection.menu == MENU_IN_GAME: # draw level
-            if self.force_full_refresh or Settings.fullscreen_refresh: # redraw background objects
-                self.background.draw()
-                for obj in self.background_deco+self.glitch_zones+self.get_block_objects():
-                    obj.draw()
-                    if Settings.show_hitboxes:
-                        obj.draw_hitbox()
-            else:
-                for obj in self.background_deco+self.glitch_zones:
-                    self.rects.append(obj.draw())
-                    if Settings.show_hitboxes:
-                        self.rects.append(obj.draw_hitbox())
-                dx = self.xscroll-self.prev_xscroll
-                for block in self.get_block_objects():
-                    rect = block.draw()
-                    if Settings.show_hitboxes:
-                        block.draw_hitbox()
-                    if rect is None: continue
-                    self.rects.append(pygame.Rect(rect.x+min(dx, 0), rect.y, rect.w+max(dx, 0), rect.h))
-                    self.draw_next.append(block)
-                if dx > 0:
-                    self.rects.append(pygame.Rect(self.game_width+dx if dx < 0 else 0, 0, abs(dx), self.game_height))
+            for obj in self.background_deco+self.glitch_zones+self.get_block_objects():
+                obj.draw()
+                if Settings.show_hitboxes:
+                    obj.draw_hitbox()
             self.rects.append(self.player.draw())
             if Settings.show_hitboxes:
                 self.rects.append(self.player.draw_hitbox())
@@ -996,9 +1075,6 @@ class GameController(GameControllerBase):
                 self.rects.append(deco.draw())
                 if Settings.show_hitboxes:
                     self.rects.append(deco.draw_hitbox())
-        else: # draw menu
-            if self.force_full_refresh or Settings.fullscreen_refresh:
-                self.background.draw()
         for obj in self.ui_objects: # draw ui
             if obj.hide_ok and Input.primary:
                 continue
@@ -1014,39 +1090,55 @@ class GameController(GameControllerBase):
                 else:
                     cx, cy = self.game_width//2, self.game_height//2
                     amount = 0.005
-                self.screen_out = shader.chromatic(
-                    self.screen_out,
+                self.screen = shader.chromatic(
+                    self.screen,
                     min(max(cx, 0), self.game_width), min(max(cy, 0), self.game_height),
                     .9999, fx=amount
                 )
             elif random.randint(0, 1) == 0:
-                shader.tv_scan(self.screen_out, random.randint(5, 20))
+                shader.tv_scan(self.screen, random.randint(5, 20))
         if self.in_game and self.selection.menu == MENU_IN_GAME:
             if self.npc_dialogue.shown and self.npc_dialogue.current.content is not None:
                 container = self.assets.ui.get("dialogue_container")
-                self.screen_out.blit(container, (
+                self.screen.blit(container, (
                     self.game_width//2-container.get_width()//2,
                     self.game_height-container.get_height()-8
                 ))
                 content = self.assets.font.render(self.npc_dialogue.current.content)
-                self.screen_out.blit(content, (
+                self.screen.blit(content, (
                     self.game_width//2-content.get_width()//2,
                     self.game_height-80-content.get_height()//2-max(4-self.npc_dialogue.change_frame, 0)
                 ))
                 owner = self.assets.font.render(self.npc_dialogue.current.owner)
-                self.screen_out.blit(owner, (40, self.game_height-160))
+                self.screen.blit(owner, (40, self.game_height-160))
         if self.transition is not None:
             self.rects.append(self.transition.draw())
         y = 0
+        overlays = []
         if Settings.show_fps:
-            fps = round(self.clock.get_fps(), 2)
-            text = Assets.debug_font.render(str(fps), False, WHITE)
-            self.rects.append(self.screen_out.blit(text, (3, y+2)))
+            text = Assets.debug_font.render(str(round(self.clock.get_fps(), 2)), False, WHITE)
+            overlays.append((text, (3, y+2)))
             y += 16
+        if GlobalSave.speedrun_mode and self.in_game:
+            text = Assets.debug_font.render(self.format_elapsed(self.get_elapsed_time()), False, WHITE)
+            overlays.append((text, (3, y+2)))
+            y += 16
+            for split in self.splits[-5:]:
+                text = Assets.debug_font.render(split[0], False, WHITE)
+                overlays.append((text, (3, y+2)))
+                text = Assets.debug_font.render(split[2], False, WHITE)
+                overlays.append((text, (180-text.get_width()-3, y+2)))
+                y += 16
         if not (self.in_game and self.selection.menu == MENU_IN_GAME) and RASPBERRY_PI:
             indicator = Assets.status_indicator()
-            self.screen_out.blit(indicator, (0, y))
+            overlays.append((indicator, (0, y)))
             y += indicator.get_height()
+        if y > 16 and self.in_game:
+            shade = Assets.sized_surface(180, y)
+            shade.fill((0, 0, 0, 128))
+            self.rects.append(self.screen.blit(shade, (0, 0)))
+        for args in overlays:
+            self.rects.append(self.screen.blit(*args))
 
     def push_particle(self, *parts):
         self.particles.extend(parts)
@@ -1120,7 +1212,6 @@ class GameController(GameControllerBase):
         self.background_deco = filt(self.background_deco)
         self.foreground_deco = filt(self.foreground_deco)
         self.glitch_zones = filt(self.glitch_zones)
-        self.draw_next = filt(self.draw_next)
 
     def set_checkpoint(self, bypass_rookie=False, **kwargs):
         if self.level.rookie_checkpoints and self.difficulty > 0 and not bypass_rookie:
@@ -1167,6 +1258,20 @@ class GameController(GameControllerBase):
             if next_pos[0] <= 0: self.assets.load_virus()
             else: self.assets.unload_virus()
 
+    def shift_all_objects(self, amount):
+        self.player.x += amount
+        for obj in self.get_all_objects():
+            obj.x += amount
+            obj.rect.x += amount
+            obj.update_hitbox()
+        for part in self.particles:
+            part.rect.x += amount
+        for atk in self.player_attacks:
+            atk.rect.x += amount
+            atk.update_hitboxes()
+        self.xscroll += amount
+        self.xscroll_target += amount
+
     def warp_teleporter(self, pos):
         if pos is None: return
         if len(pos) == 3:
@@ -1181,27 +1286,12 @@ class GameController(GameControllerBase):
                 if obj.num == 1:
                     target = obj
                     break
-            self.force_full_refresh = True
             self.background.change_to(self.level.background)
             if target is not None:
                 self.player.move_hitbox(centerx=target.rect.centerx, bottom=target.rect.bottom)
                 self.set_checkpoint(centerx=target.rect.centerx, bottom=target.rect.bottom)
         elif len(pos) == 2:
             self.player.move_hitbox(centerx=pos[0], bottom=pos[1])
-
-    def shift_all_objects(self, amount):
-        self.player.x += amount
-        for obj in self.get_all_objects():
-            obj.x += amount
-            obj.rect.x += amount
-            obj.update_hitbox()
-        for part in self.particles:
-            part.rect.x += amount
-        for atk in self.player_attacks:
-            atk.rect.x += amount
-            atk.update_hitboxes()
-        self.xscroll += amount
-        self.xscroll_target += amount
 
     def warp_left(self):
         if self.level_left is None: return
@@ -1227,13 +1317,11 @@ class GameController(GameControllerBase):
         if not level_loaded:
             self.create_level(self.level)
             self.scroll_right = False
-            self.force_full_refresh = True
         if self.scroll_left:
             self.create_level(self.level_left, -1)
         self.load_music()
         if self.background.num != self.level.background:
             self.background.change_to(self.level.background, side=-1 if level_loaded else 0)
-            self.force_full_refresh = True
         self.set_checkpoint(bottom=self.level.checkpoint_positions[2], right=self.game_width)
         self.player.update_hitbox()
     
@@ -1261,13 +1349,11 @@ class GameController(GameControllerBase):
         if not level_loaded:
             self.create_level(self.level)
             self.scroll_left = False
-            self.force_full_refresh = True
         if self.scroll_right:
             self.create_level(self.level_right, 1)
         self.load_music()
         if self.background.num != self.level.background:
             self.background.change_to(self.level.background, side=1 if level_loaded else 0)
-            self.force_full_refresh = True
         self.set_checkpoint(bottom=self.level.checkpoint_positions[0], left=0)
     
     def warp_bottom(self):
@@ -1279,7 +1365,6 @@ class GameController(GameControllerBase):
             return
         self.delete_all_objects()
         self.player.move_hitbox(top=0)
-        self.force_full_refresh = True
         self.level_top = self.level
         self.level = self.level_bottom
         self.load_level_bottom()
@@ -1297,7 +1382,6 @@ class GameController(GameControllerBase):
             return
         self.delete_all_objects()
         self.player.move_hitbox(bottom=self.game_height)
-        self.force_full_refresh = True
         self.level_bottom = self.level
         self.level = self.level_top
         self.load_level_top()

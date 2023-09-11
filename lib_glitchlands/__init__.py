@@ -48,6 +48,7 @@ SUBMENU_SLOT_SELECT = 0
 SUBMENU_SLOT_ACTION = 1
 SUBMENU_DIFFICULTY_SELECT = 2
 SUBMENU_COPY_SLOT = 3
+SUBMENU_CONFIRM_DELETE = 4
 
 MENU_SETTINGS = 2
 MENU_CREDITS = 3
@@ -56,8 +57,11 @@ SUBMENU_NO_SKIP_CREDITS = 1
 MENU_PAUSED = 4
 MENU_MAP = 5
 MENU_COMPLETION = 6
-SUBMENU_UNLOCK_MASTER = 0
-SUBMENU_NO_UNLOCK_MASTER = 1
+SUBMENU_NO_UNLOCK = 0
+SUBMENU_UNLOCK_MASTER = 1
+SUBMENU_UNLOCK_SPEEDRUN = 2
+SUBMENU_BEST_TIME = 3
+MENU_CONFIRM_RESET = 7
 
 
 ## GENERAL ##
@@ -159,8 +163,7 @@ class Background:
     def generate_pause_image(self):
         self.still_image = self.gc.screen.copy()
         overlay = Assets.sized_surface(self.gc.game_size)
-        pygame.draw.rect(overlay, BLACK, (0, 0, self.gc.game_width, self.gc.game_height))
-        overlay.set_alpha(128)
+        overlay.fill((0, 0, 0, 128))
         self.still_image.blit(overlay, (0, 0))
 
     def randomize_direction(self):
@@ -218,11 +221,11 @@ class Background:
 class FullscreenOverlay:
     def __init__(self, gc, fade=(0, 0, 0), color=None, surface=None, shake=0):
         self.gc = gc
-        self.image = Assets.sized_surface((gc.game_width+shake*2, gc.game_height+shake*2))
-        if color is not None: self.image.fill(color)
-        if surface is not None: self.image.blit(pygame.transform.scale(surface, self.gc.game_size), (shake, shake))
-        self.fade_in, self.hold, self.fade_out = fade
+        self.color = color
+        self.surface = surface
         self.shake = shake
+        self.generate_overlay()
+        self.fade_in, self.hold, self.fade_out = fade
         self.level_pos = None
         self.timer = 0
 
@@ -233,6 +236,16 @@ class FullscreenOverlay:
     @property
     def halfway(self):
         return self.timer >= self.fade_in+self.hold/2
+    
+    def generate_overlay(self, alpha=255):
+        self.image = Assets.sized_surface((self.gc.game_width+self.shake*2, self.gc.game_height+self.shake*2))
+        if self.color is not None:
+            if alpha < 255 and type(self.color) in (tuple, list) and len(self.color) == 3:
+                self.image.fill(tuple(self.color)+(alpha,))
+            else:
+                self.image.fill(self.color)
+        if self.surface is not None:
+            self.image.blit(pygame.transform.scale(self.surface, self.gc.game_size), (self.shake, self.shake))
     
     def update(self):
         self.timer += 1
@@ -245,13 +258,15 @@ class FullscreenOverlay:
             opacity = 1
         else: # fade in
             opacity = self.timer/self.fade_in
-        if not Settings.enable_transparency and opacity < .75: return
-        self.image.set_alpha(opacity*255)
+        if Settings.enable_transparency:
+            self.image.set_alpha(opacity*255)
+        elif opacity < .75:
+            return
         if self.shake != 0:
             pos = (random.randint(-self.shake*2, 0), random.randint(-self.shake*2, 0))
         else:
             pos = (0, 0)
-        return self.gc.screen_out.blit(self.image, pos)
+        return self.gc.screen.blit(self.image, pos)
 
 
 class Checkpoint:
@@ -349,23 +364,21 @@ class DialogueSlide:
 
 
 class GlobalSave(SettingsBase):
-    presets = {
-        "none": {
-            "completed_difficulties": []
-        },
-        "unlock": {
-            "completed_difficulties": [0, 1, 2]
-        }
+    display_names = {
+        "completed_difficulties": "Completed difficulties",
+        "best_time": "Best time",
+        "speedrun_mode": "Speedrun mode"
     }
     all = [
-        "completed_difficulties"
+        "completed_difficulties",
+        "best_time",
+        "speedrun_mode",
+        "unlock_master",
+        "unlock_speedrun"
     ]
 
     completed_difficulties = []
+    best_time = None
+    speedrun_mode = False
     unlock_master = False
-    unlock_skip = False
-
-    @classmethod
-    def update_extras(cls):
-        cls.unlock_master = len(GlobalSave.completed_difficulties) > 0
-        cls.unlock_skip = len(GlobalSave.completed_difficulties) > 0
+    unlock_speedrun = False

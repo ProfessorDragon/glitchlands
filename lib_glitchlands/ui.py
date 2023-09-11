@@ -45,12 +45,12 @@ class Graphic(pygame.sprite.Sprite):
         return self.gc.screen.blit(self.frames[(self.anim_frame//self.anim_delay)%len(self.frames)], self.adjusted_rect)
 
 class Button(Graphic):
-    def __init__(self, gc, frames, indexes=None, cx=None, cy=None):
+    def __init__(self, gc, frames, indexes=None, cx=None, cy=None, hit_inflate=(4, 4)):
         super().__init__(gc, frames, cx=cx, cy=cy)
         if indexes is None: self.indexes = []
         elif type(indexes[0]) == tuple: self.indexes = indexes
         else: self.indexes = [indexes]
-        self.hit_inflate = (4, 2) # used for detecting cursor hovering
+        self.hit_inflate = hit_inflate # used for detecting cursor hovering
     def update_frames(self, frames):
         super().update_frames(frames)
         self.height += 2
@@ -62,6 +62,8 @@ class Button(Graphic):
             self.unpressed_frames.append(im)
             im = Assets.sized_surface(self.width, self.height)
             im.blit(frame, (0, 2))
+            if RASPBERRY_PI:
+                im.fill((32, 32, 32), special_flags=pygame.BLEND_RGB_ADD)
             self.pressed_frames.append(im)
     def update(self):
         return
@@ -73,12 +75,11 @@ class Button(Graphic):
 
 class Slider(Button):
     def __init__(self, gc, setting, max_=1, indexes=None, cx=None, cy=None, callback=None):
-        super().__init__(gc, gc.assets.ui.get("slider"), indexes, cx=cx, cy=cy)
+        super().__init__(gc, gc.assets.ui.get("slider"), indexes, cx=cx, cy=cy, hit_inflate=(16, 8))
         self.setting = setting
         self.callback = callback
         self.max = max_/(len(self.frames)-1)
         self.anim_frame = min(max(int(round(Settings.get(setting)/self.max)), 0), len(self.frames)-1)
-        self.hit_inflate = (8, 4)
     def set(self, frame):
         prev = round(self.anim_frame*self.max, 2)
         self.anim_frame = min(max(frame, 0), len(self.frames)-1)

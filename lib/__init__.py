@@ -4,7 +4,8 @@ import pygame
 from pygame.locals import*
 
 from . import ft5406
-# from . import profilehooks
+try: from . import profilehooks
+except ImportError: profilehooks = None
 
 
 ## CONSTANTS ##
@@ -27,6 +28,8 @@ DOWN = "down"
 PYGAME_2 = pygame.version.vernum.major == 2
 RASPBERRY_PI = platform.machine() == "armv7l"
 BASH = sys.platform != "win32"
+SWAP_A_B_BUTTONS = True
+PROFILE_MAINLOOP = False
 
 if RASPBERRY_PI:
     import warnings
@@ -46,7 +49,7 @@ class Input(object):
     stick_angle = 0
     mouse_visible = True
     joystick_radius = 0.5
-    joystick_threshold = 0.15
+    joystick_deadzone = 0.2*joystick_radius
     battery_percent = None
     battery_charging = None
     cpu_temp = None
@@ -58,14 +61,30 @@ class Input(object):
     _embpi = None # pyembedded.raspberry_pi_tools.raspberrypi.PI instance (for usage stats)
     _psutil = None # psutil module (substitute for other modules on windows)
 
+    if SWAP_A_B_BUTTONS:
+        button_bcm_map["primary"], button_bcm_map["secondary"] = button_bcm_map["secondary"], button_bcm_map["primary"]
+        button_bcm_map["x"], button_bcm_map["y"] = button_bcm_map["y"], button_bcm_map["x"]
+
     @staticmethod
     def init(input_devices=True, hardware_devices=True):
         if RASPBERRY_PI:
             if input_devices:
+                # try:
+                #     import busio, digitalio, board
+                #     import adafruit_mcp3xxx.mcp3008 as MCP
+                #     from adafruit_mcp3xxx.analog_in import AnalogIn
+                # except ImportError:
+                #     print("Failed to load SPI")
+                # else:
+                #     spi = busio.SPI(clock=board.SCK, MISO=board.MISO, MOSI=board.MOSI)
+                #     cs = digitalio.DigitalInOut(board.D22)
+                #     mcp = MCP.MCP3008(spi, cs)
+                #     Input.joystick_x = AnalogIn(mcp, MCP.P0)
+                #     Input.joystick_y = AnalogIn(mcp, MCP.P1)
                 try:
                     from gpiozero import Button, MCP3008
                 except ImportError:
-                    print("Failed to load SPI")
+                    print("Failed to load GPIO")
                 else:
                     for k, v in Input.button_bcm_map.items():
                         Input.button_instances[k] = Button(v)
@@ -175,7 +194,7 @@ class Input(object):
             Input.stick_amount = math.sqrt(jx*jx+jy*jy)
             Input.stick_angle = math.degrees(math.atan2(jy, jx))
             if Input.stick_angle < 0: Input.stick_angle += 360
-            if Input.stick_amount > Input.joystick_threshold:
+            if Input.stick_amount > Input.joystick_deadzone:
                 overlap = 60
                 if not Input.right and (Input.stick_angle < overlap or Input.stick_angle > 360-overlap): Input.right = True
                 if not Input.up and 90-overlap < Input.stick_angle < 90+overlap: Input.up = True
@@ -231,6 +250,8 @@ class Input(object):
 
 class SettingsBase(object):
     save_file = None
+    last_preset = None
+    default_preset = None
     presets = {}
     all = []
 
@@ -279,35 +300,29 @@ class SettingsBase(object):
         return True
     
     @classmethod
-    def load_else_preset(cls, preset):
-        if not cls.load(): cls.apply_preset(preset)
+    def load_else_preset(cls, preset=None):
+        if preset is None:
+            if cls.default_preset is None: return
+            preset = cls.default_preset
+        if not cls.load():
+            cls.apply_preset(preset)
 
 
 class Settings(SettingsBase):
     presets = {
-        "pi": {
-            "fullscreen_refresh": True,
-            "low_detail": True,
-            "reduce_motion": False,
-            "enable_transparency": False,
-            "enable_shaders": False,
-        },
         "low": {
-            "fullscreen_refresh": False,
             "low_detail": True,
             "reduce_motion": True,
             "enable_transparency": True,
             "enable_shaders": False,
         },
         "medium": {
-            "fullscreen_refresh": True,
             "low_detail": False,
             "reduce_motion": False,
             "enable_transparency": True,
             "enable_shaders": False,
         },
         "high": {
-            "fullscreen_refresh": True,
             "low_detail": False,
             "reduce_motion": False,
             "enable_transparency": True,
@@ -319,7 +334,6 @@ class Settings(SettingsBase):
         "show_fps": "Show FPS",
         "limit_fps": "Limit FPS",
         "vsync": "Vsync",
-        "fullscreen_refresh": "Fullscreen refresh",
         "low_detail": "Low detail",
         "reduce_motion": "Reduce motion",
         "enable_transparency": "Enable transparency",
@@ -333,7 +347,6 @@ class Settings(SettingsBase):
         "show_fps",
         "limit_fps",
         "vsync",
-        "fullscreen_refresh",
         "low_detail",
         "reduce_motion",
         "enable_transparency",
@@ -348,7 +361,6 @@ class Settings(SettingsBase):
     show_fps = True
     limit_fps = True
     vsync = False
-    fullscreen_refresh = True
     low_detail = False
     reduce_motion = False
     enable_transparency = True
@@ -356,8 +368,11 @@ class Settings(SettingsBase):
     volume_music = 1 if RASPBERRY_PI else 0.2
     volume_sfx = 1 if RASPBERRY_PI else 0.2
     show_hitboxes = False
-    joystick_calibration = [0, 0.5, 1, 0, 0.5, 1] # min x, mid x, max x, min y, mid y, max y
-    last_preset = None
+    joystick_calibration = [
+        0, Input.joystick_radius, Input.joystick_radius*2, # min x, mid x, max x
+        0, Input.joystick_radius, Input.joystick_radius*2  # min y, mid y, max y
+    ]
+    default_preset = "medium"
 
 
 ## MUSIC ##
@@ -454,6 +469,7 @@ class Selection:
     def __init__(self):
         self.idx = self.x, self.y = 0, 0
         self.max = self.xmax, self.ymax = 0, 0
+        self.initial = 0, 0
         self.menu = 0
         self.submenu = 0
         self.prev_menu = 0
@@ -883,7 +899,6 @@ class GameControllerBase:
         if not Settings.enable_transparency:
             self.main_surface.set_alpha(None)
             self.screen.set_alpha(None)
-        self.force_full_refresh = True
     
     def init(self):
         self.init_display()
@@ -954,13 +969,11 @@ class GameControllerBase:
         if abs(target-value) < snap: return target
         return value + (target-value)/ease
 
-    # @profilehooks.profile
     def mainloop(self):
         self.clock = pygame.time.Clock()
         self.running = True
         self.rects = []
         self.prev_rects = []
-        self.draw_next = []
 
         while self.running:
             self.dt = self.clock.tick(60 if Settings.limit_fps else 0)/1000
@@ -972,14 +985,12 @@ class GameControllerBase:
                     break
                 if event.type == pygame.VIDEORESIZE and Settings.windowed:
                     self.output_size = self.output_width, self.output_height = event.dict["size"]
-                    self.force_full_refresh = True
                 elif event.type == pygame.MOUSEMOTION:
-                    if not self.force_full_refresh:
-                        if RASPBERRY_PI:
-                            self.selection.disable_mouse()
-                        else:
-                            self.selection.enable_mouse()
-                            self.update_cursor_selection()
+                    if RASPBERRY_PI:
+                        self.selection.disable_mouse()
+                    else:
+                        self.selection.enable_mouse()
+                        self.update_cursor_selection()
                 elif event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP) and not RASPBERRY_PI:
                     if event.button == 1:
                         if event.type == pygame.MOUSEBUTTONDOWN:
@@ -995,28 +1006,25 @@ class GameControllerBase:
                 self.buffer_touch_selection = False
 
             self.draw()
-            self.screen_out = self.screen.copy()
             self.draw_overlays()
             if self.hidden: continue
             try:
                 if self.output_size == self.game_size:
-                    self.main_surface.blit(self.screen_out, (0, 0))
+                    self.main_surface.blit(self.screen, (0, 0))
                 else:
-                    self.main_surface.blit(pygame.transform.scale(self.screen_out, self.output_size), (0, 0))
+                    self.main_surface.blit(pygame.transform.scale(self.screen, self.output_size), (0, 0))
             except pygame.error: continue
-            self.rects = list(filter(lambda rect: rect is not None, self.rects))
-            if self.force_full_refresh or Settings.fullscreen_refresh:
-                pygame.display.update()
-            else:
-                xscale, yscale = self.output_width/self.game_width, self.output_height/self.game_height
-                inflated = [self.scale_rect(rect, xscale, yscale).inflate(3, 3) for rect in self.rects+self.prev_rects]
-                pygame.display.update(inflated)
-            if not Settings.fullscreen_refresh:
-                for rect in self.rects:
-                    self.patch_background(rect)
+            pygame.display.update()
+            # self.rects = list(filter(lambda rect: rect is not None, self.rects))
+            # xscale, yscale = self.output_width/self.game_width, self.output_height/self.game_height
+            # inflated = [self.scale_rect(rect, xscale, yscale).inflate(3, 3) for rect in self.rects+self.prev_rects]
+            # pygame.display.update(inflated)
+            # for rect in self.rects:
+            #     self.patch_background(rect)
             self.prev_rects = self.rects[:]
-            self.force_full_refresh = False
             self.frame += 1
 
         Input.stop()
         pygame.quit()
+    
+    if PROFILE_MAINLOOP and profilehooks is not None: mainloop = profilehooks.profile(mainloop)
