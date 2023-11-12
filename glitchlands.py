@@ -528,12 +528,13 @@ class GameController(GameControllerBase):
                 y += 40
             x += 270
             ui.create_text(self, "Music", cx=x, cy=190)
-            ui.create_slider(self, "volume_music", 1 if RASPBERRY_PI else 0.5, (0, len(self.shown_settings)), cx=x, cy=215,
-                             callback=self.adjust_music_volume)
+            ui.create_slider(self, "volume_music", 1 if RASPBERRY_PI else 0.5, [(1, 0), (1, 1), (1, 2), (1, 3)],
+                             cx=x, cy=215, callback=self.adjust_music_volume)
             ui.create_text(self, "SFX", cx=x, cy=270)
-            ui.create_slider(self, "volume_sfx", 1 if RASPBERRY_PI else 0.5, (0, len(self.shown_settings)+1), cx=x, cy=295)
-            ui.create_button(self, buttons[1], (0, len(self.shown_settings)+2), cx=x, cy=390)
-            mx = [0, len(self.shown_settings)+3]
+            ui.create_slider(self, "volume_sfx", 1 if RASPBERRY_PI else 0.5, [(1, 4), (1, 5)],
+                             cx=x, cy=295)
+            ui.create_button(self, buttons[1], [(1, 6), (1, 7)], cx=x, cy=390)
+            mx = [2, len(self.shown_settings)]
         elif menu in (MENU_CREDITS, MENU_COMPLETION):
             self.background.still_image = Assets.sized_surface(self.game_size)
             self.background.still_image.fill((30, 30, 30))
@@ -796,10 +797,7 @@ class GameController(GameControllerBase):
                     self.set_menu(sel.menu, SUBMENU_SLOT_SELECT, (self.save_slot%4, 0))
                     sound = "return"
         elif sel.menu == MENU_SETTINGS:
-            if sel.y == sel.ymax-1:
-                self.set_menu(sel.prev_menu)
-                sound = "return"
-            elif sel.y < len(self.shown_settings):
+            if sel.x == 0:
                 attr = self.shown_settings[sel.y]
                 cls = GlobalSave if attr in GlobalSave.all else Settings
                 enabled = not cls.get(attr)
@@ -808,6 +806,9 @@ class GameController(GameControllerBase):
                 cls.save()
                 if button is not None:
                     button.update_frames(self.assets.ui.get("switch")[1 if enabled else 2])
+            elif sel.y == sel.ymax-1 or sel.y == sel.ymax-2:
+                self.set_menu(sel.prev_menu)
+                sound = "return"
         elif sel.menu == MENU_CREDITS:
             if sel.submenu == SUBMENU_SKIP_CREDITS and (Input.start or Input.escape):
                 self.in_game = False
