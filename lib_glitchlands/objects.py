@@ -1724,11 +1724,11 @@ class VirusBoss(Object):
                     })
                 )
         elif attack == self.ATTACK_SAWS:
-            gaps = [(1, 2), (2, 3), (3, 4), (5, 2)]
+            gaps = [(3, 4), (3,) if diff > 0 else (2, 3)]
             if random.randint(0, 1) == 0: gaps.append((1, 2))
             else: gaps.append((2, 3))
-            if diff > 0: gaps.append((3,))
-            else: gaps.append((2, 3))
+            if random.randint(0, 1) == 0: gaps.append((5, 2))
+            else: gaps.append((1, 2))
             random.shuffle(gaps)
             gaps = gaps[:5]
             self.attack_timer = 0
@@ -1747,13 +1747,13 @@ class VirusBoss(Object):
                     )
         elif attack == self.ATTACK_BATS:
             self.attack_timer = 20
-            for delay in range(10):
-                self.attack_timer += 31-diff*3
+            for delay in range(8):
+                self.attack_timer += 31-diff*5
                 self.gc.push_object(
                     Bat(self.gc, self.level, {
                         "x": self.gc.game_width*random.uniform(.1, .9),
                         "y": -56,
-                        "attack_delay": delay*(31-diff*3),
+                        "attack_delay": delay*(31-diff*5),
                         "speed_base": 8
                     })
                 )

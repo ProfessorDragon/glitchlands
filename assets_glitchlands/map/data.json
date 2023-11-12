@@ -146,7 +146,8 @@
         "borders": [
           0,
           1,
-          2
+          2,
+          11
         ],
         "icon_name": "crystal",
         "icon_pos": [
@@ -241,14 +242,19 @@
       "-2,2": {
         "color": 6,
         "borders": [
+          6,
+          7,
+          8,
           11,
-          8
+          3
         ]
       },
       "-1,2": {
         "color": 6,
         "borders": [
           0,
+          1,
+          2,
           3,
           4,
           5,
@@ -1005,6 +1011,11 @@
       "5,5": {
         "color": 11,
         "borders": [
+          0
+        ],
+        "icon_name": "upgrade",
+        "icon_pos": [
+          0.75,
           0
         ]
       },

@@ -157,9 +157,11 @@ class AssetLoader:
                 im.blit(self.ui.get("menu_icons")[icon], (im.get_width()-10-18, 10))
             text = self.font_small.render(["Rookie", "Normal", "Master"][save_data.get("difficulty", 0)])
             im.blit(text, (cx-text.get_width()//2, 42))
-            hours, rem = divmod(save_data.get("elapsed_time", 0), 3600)
+            if GlobalSave.speedrun_mode and save_data.get("completed_time") is not None: t = save_data["completed_time"]
+            else: t = save_data.get("elapsed_time", 0)
+            hours, rem = divmod(t, 3600)
             minutes, seconds = divmod(rem, 60)
-            text = self.font_small.render("{:0>2}:{:0>2}:{:0>2}".format(int(hours), int(minutes), int(seconds)))
+            text = self.font_small.render("{:0>2}:{:0>2}:{:0>2}".format(int(hours), int(minutes), math.ceil(seconds)))
             im.blit(text, (cx-text.get_width()//2, 64))
             deaths = save_data.get("death_count", 0)
             text = self.font_small.render("1 death" if deaths == 1 else f"{deaths} deaths")
@@ -424,7 +426,7 @@ class GameController(GameControllerBase):
         hours, rem = divmod(elapsed, 3600)
         minutes, rem = divmod(rem, 60)
         seconds, milliseconds = divmod(rem, 1)
-        formatted = "{:0>2}:{:0>2}.{:0>2}".format(int(minutes), int(seconds), int(milliseconds*100))
+        formatted = "{:0>2}:{:0>2}.{:0>2}".format(int(minutes), int(seconds), math.ceil(milliseconds*100))
         if hours > 0: formatted = "{:0>2}:".format(int(hours))+formatted
         return formatted
 
@@ -968,9 +970,10 @@ class GameController(GameControllerBase):
                 else:
                     self.update_scrolling_menu()
             elif self.selection.menu == MENU_MAP:
-                if Input.select and not self.selection.button_pressed:
-                    self.disable_pause()
-                elif not Input.select and Input.stick_amount > Input.joystick_deadzone:
+                if Input.select or Input.start:
+                    if not self.selection.button_pressed:
+                        self.disable_pause()
+                elif Input.stick_amount > Input.joystick_deadzone:
                     amount = (8 if Input.primary else 5)/Input.joystick_radius
                     self.selection.x -= amount*math.cos(math.radians(Input.stick_angle))
                     self.selection.y += amount*math.sin(math.radians(Input.stick_angle))
