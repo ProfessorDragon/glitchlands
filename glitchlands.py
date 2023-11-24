@@ -343,13 +343,16 @@ class GameController(GameControllerBase):
             GlobalSave.best_time = elapsed
             if GlobalSave.speedrun_mode:
                 unlock = SUBMENU_BEST_TIME
-        if not GlobalSave.unlock_master:
-            unlock = SUBMENU_UNLOCK_MASTER
-            GlobalSave.unlock_master = True
-        elif not GlobalSave.unlock_speedrun and elapsed < 30*60:
+        if not GlobalSave.unlock_speedrun and elapsed < 60*60:
             unlock = SUBMENU_UNLOCK_SPEEDRUN
             GlobalSave.unlock_speedrun = True
             self.shown_settings.append("speedrun_mode")
+            if not GlobalSave.unlock_master:
+                unlock = SUBMENU_UNLOCK_MASTER_SPEEDRUN
+                GlobalSave.unlock_master = True
+        elif not GlobalSave.unlock_master:
+            unlock = SUBMENU_UNLOCK_MASTER
+            GlobalSave.unlock_master = True
         GlobalSave.save()
         self.glitch_chance = -1
         self.save_progress()
@@ -560,6 +563,7 @@ class GameController(GameControllerBase):
                 text += f"  Deaths: {self.death_count}\n\n"
                 if submenu == SUBMENU_UNLOCK_MASTER: text += "Master difficulty has\nbeen unlocked"
                 elif submenu == SUBMENU_UNLOCK_SPEEDRUN: text += "Speedrun mode has been\nunlocked"
+                elif submenu == SUBMENU_UNLOCK_MASTER_SPEEDRUN: text += "Master difficulty and\n speedrun mode have been\nunlocked"
                 elif submenu == SUBMENU_BEST_TIME: text += "New personal best!"
                 else: text += "Press any button to continue"
                 ui.create_text(self, text, cy=340)
