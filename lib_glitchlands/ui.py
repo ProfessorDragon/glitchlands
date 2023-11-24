@@ -62,8 +62,7 @@ class Button(Graphic):
             self.unpressed_frames.append(im)
             im = Assets.sized_surface(self.width, self.height)
             im.blit(frame, (0, 2))
-            if RASPBERRY_PI:
-                im.fill((32, 32, 32), special_flags=pygame.BLEND_RGB_ADD)
+            im.fill((32, 32, 32), special_flags=pygame.BLEND_RGB_ADD)
             self.pressed_frames.append(im)
     def update(self):
         return

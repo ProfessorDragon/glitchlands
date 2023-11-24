@@ -287,6 +287,21 @@ class Checkpoint:
         self.valid = self.level_pos is not None and \
             (self.left, self.right, self.centerx).count(None) == 2 and \
             (self.top, self.bottom).count(None) == 1
+    
+    def get_any_x(self):
+        if self.centerx is not None: return self.centerx
+        if self.left is not None: return self.left
+        if self.right is not None: return self.right
+    
+    def get_any_y(self):
+        if self.bottom is not None: return self.bottom
+        if self.top is not None: return self.top
+    
+    def get_any_pos(self, wrapx=None, wrapy=None):
+        x, y = self.get_any_x(), self.get_any_y()
+        if wrapx is not None: x %= wrapx
+        if wrapy is not None: y %= wrapy
+        return x, y
         
     def get_set_sides(self):
         cp = {}

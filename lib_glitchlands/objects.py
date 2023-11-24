@@ -421,7 +421,10 @@ class AreaTrigger(Activateable):
                 self.gc.add_split("World 3")
         elif self.num == 1: # checkpoint
             if self.gc.player.fall_frame == 0:
+                prev = self.gc.checkpoint.get_set_sides()
                 self.gc.set_checkpoint(bottom=self.rect.bottom, centerx=self.rect.centerx)
+                if prev != self.gc.checkpoint.get_set_sides():
+                    self.gc.player.spawn_particles_checkpoint()
             else:
                 self.activated = False
     def collides_any(self, entity):
@@ -725,18 +728,19 @@ class FallingPlatform(Object):
         self.anim_delay = 2
         self.prev_anim_frame = self.anim_frame
         self.drop_timer = 0
-        self.restore_timer = 0
+        self.accelerate = False
     def update_hitbox(self):
         self.hitbox = pygame.Rect(self.rect.x, self.rect.y, self.rect.w, 10)
     def update(self):
         self.prev_anim_frame = self.anim_frame
         if self.anim == "idle":
+            self.accelerate = False
             if self.anim_frame > 0:
                 self.anim_frame -= 1
         elif self.anim == "activated":
             if self.drop_timer > 0:
-                self.drop_timer -= 1
-                if self.drop_timer == 0:
+                self.drop_timer -= 2 if self.accelerate else 1
+                if self.drop_timer <= 0:
                     self.anim = "drop"
                     self.anim_frame = 0
                     self.drop_timer = 100
@@ -744,8 +748,8 @@ class FallingPlatform(Object):
         elif self.anim == "drop":
             self.anim_frame += 1
             if self.drop_timer > 0:
-                self.drop_timer -= 1
-                if self.drop_timer == 0:
+                self.drop_timer -= 2 if self.accelerate else 1
+                if self.drop_timer <= 0:
                     self.anim = "idle"
                     self.anim_frame = len(self.frames)*self.anim_delay-1
                     self.gc.play_sound("falling_platform_restore")
@@ -778,22 +782,28 @@ class Button(Activateable):
         self.collides = COLLISION_PASS
         self.timer = 0
         self.timer_duration = [3, 4, 6][self.num]*[80, 70, 60][self.gc.difficulty]
+        self.linked_objects = None
     def update_hitbox(self):
         self.hitbox = pygame.Rect(self.rect.x+2, self.y+20, self.rect.w-4, self.rect.h-20)
     def should_trigger(self, obj):
         return isinstance(obj, Activateable) and not isinstance(obj, Button) and \
             obj.link == self.link and obj.level.level_pos == self.level.level_pos
+    def get_linked_objects(self):
+        if self.linked_objects is not None:
+            return self.linked_objects
+        self.linked_objects = [obj for obj in self.gc.get_all_objects() if self.should_trigger(obj)]
+        return self.linked_objects
     def activate(self):
         self.activated = True
         self.timer = self.timer_duration
-        for obj in self.gc.get_all_objects():
-            if self.should_trigger(obj): obj.activate()
+        for obj in self.get_linked_objects():
+            obj.activate()
         self.gc.play_sound("button_press")
     def deactivate(self):
         self.activated = False
         self.timer = 0
-        for obj in self.gc.get_all_objects():
-            if self.should_trigger(obj): obj.deactivate()
+        for obj in self.get_linked_objects():
+            obj.deactivate()
         self.gc.play_sound("button_release")
     def update(self):
         if self.timer < 6 and self.anim_frame//2 > 0:
@@ -1358,7 +1368,7 @@ class SawTrap(Object):
         self.collides = COLLISION_SHIELDBREAK
         self.anim_delay = 2
     def update_hitbox(self):
-        if not self.constrained: self.hitbox = self.rect.inflate(-20, -20)
+        if not self.constrained: self.hitbox = self.rect.inflate(-32, -32)
         elif self.num%2 == 0: self.hitbox = pygame.Rect(self.rect.x+10, self.rect.y+4, self.rect.w-20, self.rect.h//2-8)
         else: self.hitbox = pygame.Rect(self.rect.x+4, self.rect.y+10, self.rect.w//2-8, self.rect.h-20)
     def update(self):
@@ -1474,41 +1484,6 @@ class Bat(Object):
             hflip=self.facing_right
         ), self.rect)
 
-class ShieldPedestal(Object):
-    def update_config(self, config):
-        super().update_config(config)
-        self.frames = self.gc.assets.objects.get("shield_pedestal")
-        self.rect = pygame.Rect(self.x, self.y, self.frames[0].get_width(), self.frames[0].get_height())
-        self.anim = 2 if self.gc.difficulty > 1 else 0
-        self.update_hitbox()
-        self.collides = COLLISION_BLOCK
-        self.collide_sound = "step_glass"
-        self.anim_delay = 3
-    def update_hitbox(self):
-        if self.anim == 0: self.hitbox = pygame.Rect(self.rect.x+2, self.rect.y+12, self.rect.w-4, self.rect.h-12)
-        else: self.hitbox = pygame.Rect(self.rect.x+2, self.rect.y+42, self.rect.w-4, self.rect.h-42)
-    def update(self):
-        self.anim_frame += 1
-    def collides_attack(self, entity, hitbox):
-        if self.anim != 0 or not self.hitbox.colliderect(hitbox) or self.level.level_pos != self.gc.level.level_pos or \
-            self.rect.left-self.gc.xscroll <= 0 and self.rect.right-self.gc.xscroll >= self.gc.game_width:
-            return False
-        entity.player.health = entity.player.max_health
-        entity.player.equip_shield()
-        particles.ParticleSpawner(
-            self.gc, ("circle_white",),
-            [
-                {"center": (self.hitbox.centerx, self.hitbox.y+self.hitbox.w//2), "xv": 4, "yv": 0,
-                    "fade_time": 0, "size_change": -0.05}
-            ],
-            class_=particles.FadeOutParticle, dirofs=360, count=20
-        ).spawn()
-        self.anim = 1
-        self.update_hitbox()
-        return False
-    def draw(self):
-        self.blit_image(self.frames[self.anim*8+self.anim_frame//self.anim_delay%8], self.rect)
-
 
 ## BOSS ##
 
@@ -1549,6 +1524,15 @@ class VirusBoss(Object):
             self.gc.append_visited()
         self.set_attack(self.ATTACK_INTRO if self.gc.completed_time is None else self.ATTACK_TOMBSTONE)
     
+    def spawn_ambient_particles(self):
+        particles.ParticleSpawner(
+            self.gc, ("circle_black", "square_black"),
+            [
+                {"center": self.rect.center, "xv": 0, "yv": 0, "fade_time": 12}
+            ],
+            class_=particles.FadeOutParticle, dirofs=0, count=2, yofs=self.rect.height, xofs=self.rect.width*0.7
+        ).spawn()
+
     def spawn_explode_particles(self):
         particles.ParticleSpawner(
             self.gc, ("circle_black", "circle_black", "circle_black", "circle_red", "circle_green", "circle_blue"),
@@ -1577,7 +1561,7 @@ class VirusBoss(Object):
                     "x": pos[0]*self.tilew,
                     "y": pos[1]*self.tileh,
                     "appear_delay": (sum(pos)+delay-min_pos)*4,
-                    "disappear_delay": 180,
+                    "disappear_delay": 160,
                     **kwargs
                 })
             )
@@ -1587,7 +1571,7 @@ class VirusBoss(Object):
                         "x": self.gc.game_width-self.tilew-pos[0]*self.tilew,
                         "y": pos[1]*self.tileh,
                         "appear_delay": (sum(pos)+delay-min_pos)*4,
-                        "disappear_delay": 180,
+                        "disappear_delay": 160,
                         **kwargs, **kwargs2
                     })
                 )
@@ -1716,7 +1700,6 @@ class VirusBoss(Object):
                 self.gc.push_object(
                     VirusTentacle(self.gc, self.level, {
                         "x": self.tilew*1.5+x*self.tilew*2,
-                        "y": -self.gc.game_height,
                         "direction": 0,
                         "drop_speed": 11,
                         "drop_delay": delay*(21-diff*3)+10,
@@ -1760,7 +1743,7 @@ class VirusBoss(Object):
         elif attack in (self.ATTACK_RED_GLITCH_HORIZONTAL, self.ATTACK_RED_GLITCH_VERTICAL):
             positions = [(x+1, y+9) for x in range(5) for y in range(5)]
             self.create_glitch_zone(positions, kwargs={"num": 0})
-            self.attack_timer = 200
+            self.attack_timer = 180
             if attack == self.ATTACK_RED_GLITCH_HORIZONTAL:
                 self.init_horizontal_attack(1.3)
                 self.attack_timer += 30
@@ -1769,7 +1752,6 @@ class VirusBoss(Object):
                     self.gc.push_object(
                         VirusTentacle(self.gc, self.level, {
                             "x": self.tilew*.5+x*self.tilew*2,
-                            "y": self.gc.game_height,
                             "direction": 1,
                             "drop_delay": x*10+60,
                             "drop_offset": x*self.tileh*1.5
@@ -1778,7 +1760,6 @@ class VirusBoss(Object):
                     self.gc.push_object(
                         VirusTentacle(self.gc, self.level, {
                             "x": self.gc.game_width-self.tilew*2.5-x*self.tilew*2,
-                            "y": self.gc.game_height,
                             "direction": 1,
                             "drop_delay": x*10+60,
                             "drop_offset": x*self.tileh*1.5
@@ -1788,7 +1769,7 @@ class VirusBoss(Object):
         elif attack in (self.ATTACK_BLUE_GLITCH_HORIZONTAL, self.ATTACK_BLUE_GLITCH_VERTICAL):
             positions = [(x+2, y+12) for x in range(5) for y in range(2)]
             self.create_glitch_zone(positions, kwargs={"num": 2, "physics": {"jump_height": 10.5}})
-            self.attack_timer = 200
+            self.attack_timer = 180
             if attack == self.ATTACK_BLUE_GLITCH_HORIZONTAL:
                 self.init_horizontal_attack(1.2)
                 self.attack_timer += 20
@@ -1797,7 +1778,6 @@ class VirusBoss(Object):
                     self.gc.push_object(
                         VirusTentacle(self.gc, self.level, {
                             "x": self.tilew*.5+(5-x)*self.tilew*2,
-                            "y": self.gc.game_height,
                             "direction": 1,
                             "drop_delay": x*10+50,
                             "drop_offset": x*self.tileh*1.5,
@@ -1806,7 +1786,6 @@ class VirusBoss(Object):
                     self.gc.push_object(
                         VirusTentacle(self.gc, self.level, {
                             "x": self.gc.game_width-self.tilew*2.5-(5-x)*self.tilew*2,
-                            "y": self.gc.game_height,
                             "direction": 1,
                             "drop_delay": x*10+50,
                             "drop_offset": x*self.tileh*1.5
@@ -1826,7 +1805,7 @@ class VirusBoss(Object):
                     "tip_yofs": -self.tileh*2
                 }
             )
-            self.attack_timer = 200
+            self.attack_timer = 180
             if attack == self.ATTACK_GREEN_GLITCH_HORIZONTAL:
                 self.init_horizontal_attack(1.2)
                 self.attack_timer += 10
@@ -1836,7 +1815,6 @@ class VirusBoss(Object):
                         VirusTentacle(self.gc, self.level, {
                             "x": (self.gc.game_width-self.tilew*2.5-x*self.tilew*2) if self.facing_right else \
                                 (self.tilew*.5+x*self.tilew*2),
-                            "y": self.gc.game_height,
                             "direction": 1,
                             "drop_delay": x*10+50,
                             "drop_offset": self.tileh*5,
@@ -1849,7 +1827,6 @@ class VirusBoss(Object):
                     VirusTentacle(self.gc, self.level, {
                         "x": (x*self.tilew*2) if self.facing_right else \
                             (self.gc.game_width-self.tilew*2-x*self.tilew*2),
-                        "y": -self.gc.game_height,
                         "direction": 0,
                         "drop_speed": 20,
                         "drop_delay": x*10+10,
@@ -2139,6 +2116,7 @@ class VirusBoss(Object):
             self.xv += .15 if self.facing_right else -.15
             if self.rect.bottom < self.gc.game_height*-.5: self.next_attack()
             else: self.yv -= .4
+            self.spawn_ambient_particles()
         elif self.attack == self.ATTACK_DEFEAT:
             self.x = self.gc.game_width//2+random.randint(-self.anim_frame, self.anim_frame)
             self.y = (self.gc.game_height-self.tileh)//2+random.randint(-self.anim_frame, self.anim_frame)
@@ -2155,11 +2133,13 @@ class VirusBoss(Object):
                 self.self_destruct = True
                 self.gc.defeat_virus()
         elif self.attack in (
-            self.ATTACK_RED_GLITCH_HORIZONTAL,
-            self.ATTACK_BLUE_GLITCH_HORIZONTAL,
-            self.ATTACK_GREEN_GLITCH_HORIZONTAL):
-            self.xv = 9 if self.facing_right else -9
+                self.ATTACK_RED_GLITCH_HORIZONTAL,
+                self.ATTACK_BLUE_GLITCH_HORIZONTAL,
+                self.ATTACK_GREEN_GLITCH_HORIZONTAL
+            ):
+            self.xv = 10 if self.facing_right else -10
             self.yv = [0.2, 0.1, 0][self.gc.difficulty]
+            self.spawn_ambient_particles()
         self.x += self.xv
         self.y += self.yv
         if self.x != self.rect.centerx or self.y != self.rect.centery:
@@ -2248,15 +2228,16 @@ class VirusTentacle(Object):
     def update_config(self, config):
         super().update_config(config)
         self.direction = config.get("direction", 0)
-        self.rect = pygame.Rect(self.x, self.y, self.tilew*2, self.gc.game_height)
-        sheet = self.gc.assets.virus.get("tentacle_wave")
+        self.y = -self.gc.game_height-self.tileh*2 if self.direction == 0 else self.gc.game_height
+        self.rect = pygame.Rect(self.x, self.y, self.tilew*2, self.gc.game_height+self.tileh*2)
+        sheet = self.gc.assets.virus.get("tentacle_drill")
         for x in range(sheet.width):
             surface = Assets.sized_surface(self.rect.size)
-            for y in range(self.gc.game_height//(self.tileh*2)):
+            for y in range(self.rect.height//(self.tileh*2)):
                 if self.direction == 0: surface.blit(sheet.get(x=x, y=0), (0, surface.get_height()-(y+2)*self.tileh*2))
-                elif self.direction == 1: surface.blit(sheet.get(x=x, y=0, vflip=True), (0, (y+1)*self.tileh*2))
+                else: surface.blit(sheet.get(x=x, y=0, vflip=True), (0, (y+1)*self.tileh*2))
             if self.direction == 0: surface.blit(sheet.get(x=x, y=1), (0, surface.get_height()-self.tileh*2))
-            elif self.direction == 1: surface.blit(sheet.get(x=x, y=1, vflip=True), (0, 0))
+            else: surface.blit(sheet.get(x=x, y=1, vflip=True), (0, 0))
             self.frames.append(surface)
         self.update_hitbox()
         self.collides = COLLISION_SHIELDBREAK
@@ -2265,9 +2246,17 @@ class VirusTentacle(Object):
         self.rise_delay = config.get("rise_delay", 30)
         self.drop_speed = config.get("drop_speed", 15)
         self.rise_speed = config.get("rise_speed", 20)
-        if self.direction == 0: self.drop_target = self.gc.game_height-self.tileh
-        elif self.direction == 1: self.drop_target = 0
+        if self.direction == 0: self.drop_target = self.gc.game_height+self.tileh*2
+        else: self.drop_target = 0
         self.drop_target += config.get("drop_offset", 0)
+    def spawn_ambient_particles(self):
+        particles.ParticleSpawner(
+            self.gc, ("circle_black",),
+            [
+                {"center": self.rect.center, "xv": 0, "yv": 0, "fade_time": 12}
+            ],
+            class_=particles.FadeOutParticle, dirofs=0, count=3, yofs=self.rect.height, xofs=self.rect.width
+        ).spawn()
     def update_hitbox(self):
         if self.direction in (0, 1):
             self.hitbox = pygame.Rect(self.rect.x+4, self.rect.y, self.rect.w-8, self.rect.h-16)
@@ -2289,6 +2278,7 @@ class VirusTentacle(Object):
                 if self.rect.top <= self.drop_target+self.drop_speed: self.rect.top = self.drop_target
                 else: self.rect.y -= self.drop_speed
         self.update_hitbox()
+        self.spawn_ambient_particles()
 
 class Infection(Object):
     def update_config(self, config):

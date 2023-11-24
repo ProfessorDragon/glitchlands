@@ -3,7 +3,7 @@ import pygame
 
 from lib import*
 from lib_glitchlands import*
-from lib_glitchlands import particles
+from lib_glitchlands import objects, particles
 
 class Progression:
     def __init__(self):
@@ -148,6 +148,9 @@ class Player(pygame.sprite.Sprite):
         self.y += -14 if self.upside_down else 14
         self.gc.death_count += 1
         self.gc.play_sound("death")
+        for obj in self.gc.get_all_objects():
+            if isinstance(obj, objects.Button): obj.deactivate()
+            elif isinstance(obj, objects.FallingPlatform): obj.accelerate = True
     
     def shieldbreak(self):
         if self.hurt_timer > 0: return
@@ -241,6 +244,11 @@ class Player(pygame.sprite.Sprite):
             ],
             class_=particles.FadeOutParticle, dirofs=30, vflip=self.upside_down
         ).spawn()
+    
+    def spawn_particles_checkpoint(self, center=None):
+        if center is None: center = (self.x+self.rectw//2, self.y+self.recth)
+        name = "silhouette" if self.facing_right else "silhouette_hflip"
+        self.gc.push_particle(particles.FadeOutParticle(self.gc, name, center))
 
     def collide_bottom(self, y):
         self.move_hitbox(bottom=y)

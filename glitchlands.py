@@ -86,6 +86,9 @@ class AssetLoader:
 
         self.particles = Collection()
         self.particles.add("spawn", Assets.load_spritesheet("decoration/spawn.png"))
+        sil = Assets.load_image("decoration/silhouette.png", (64, 128))
+        self.particles.add("silhouette", sil)
+        self.particles.add("silhouette_hflip", pygame.transform.flip(sil, True, False))
         self.particles.add("circle_red", self.circle_particle(RED))
         self.particles.add("circle_green", self.circle_particle(GREEN))
         self.particles.add("circle_blue", self.circle_particle(BLUE))
@@ -111,7 +114,7 @@ class AssetLoader:
         split_frames = Assets.load_spritesheet("virus/split.png", (24, 48), (96, 192))
         self.virus.add("split_left", split_frames[0])
         self.virus.add("split_right", split_frames[1])
-        self.virus.add("tentacle_wave", Assets.load_spritesheet("virus/tentacle_wave.png", (32, 32), (64, 64), vflip=True))
+        self.virus.add("tentacle_drill", Assets.load_spritesheet("virus/tentacle_drill.png", (32, 32), (64, 64), vflip=True))
         self.virus.add("hit_button", Assets.load_spritesheet("virus/hit_button.png", (32, 16), (64, 32)))
         self.virus.add("infection", Assets.load_spritesheet("virus/infection.png", (32, 16), (64, 32), hflip=True))
         self.virus.add("crystal_barrier", Assets.load_spritesheet("virus/crystal_barrier.png", (32, 16), (64, 32)))
@@ -1326,8 +1329,12 @@ class GameController(GameControllerBase):
         self.load_music()
         if self.background.num != self.level.background:
             self.background.change_to(self.level.background, side=-1 if level_loaded else 0)
-        self.set_checkpoint(bottom=self.level.checkpoint_positions[2], right=self.game_width)
-        self.player.update_hitbox()
+        if self.level.checkpoint_positions[2] is not None:
+            prev = self.checkpoint.get_any_pos()
+            prev = (prev[0]+(self.checkpoint.level_pos[1]-self.level.level_pos[1])*self.game_width, prev[1])
+            self.set_checkpoint(bottom=self.level.checkpoint_positions[2], right=self.game_width)
+            if self.checkpoint.get_any_pos() != prev:
+                self.player.spawn_particles_checkpoint(center=(self.game_width, self.checkpoint.bottom))
     
     def warp_right(self):
         if self.level_right is None: return
@@ -1358,7 +1365,12 @@ class GameController(GameControllerBase):
         self.load_music()
         if self.background.num != self.level.background:
             self.background.change_to(self.level.background, side=1 if level_loaded else 0)
-        self.set_checkpoint(bottom=self.level.checkpoint_positions[0], left=0)
+        if self.level.checkpoint_positions[0] is not None:
+            prev = self.checkpoint.get_any_pos()
+            prev = (prev[0]+(self.checkpoint.level_pos[1]-self.level.level_pos[1])*self.game_width, prev[1])
+            self.set_checkpoint(bottom=self.level.checkpoint_positions[0], left=0)
+            if self.checkpoint.get_any_pos() != prev:
+                self.player.spawn_particles_checkpoint(center=(0, self.checkpoint.bottom))
     
     def warp_bottom(self):
         if self.level_bottom is None:
@@ -1377,7 +1389,11 @@ class GameController(GameControllerBase):
         self.create_levels_auto(xscroll=True)
         self.load_music()
         self.background.change_to(self.level.background)
-        self.set_checkpoint(centerx=self.level.checkpoint_positions[1], top=0)
+        if self.level.checkpoint_positions[1] is not None:
+            prev = self.checkpoint.get_set_sides()
+            self.set_checkpoint(centerx=self.level.checkpoint_positions[1], top=0)
+            if self.checkpoint.get_set_sides() != prev:
+                self.player.spawn_particles_checkpoint(center=(self.player.x+self.player.rectw//2, self.player.hitbox.height))
 
     def warp_top(self):
         if self.level_top is None: return
