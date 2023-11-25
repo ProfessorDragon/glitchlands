@@ -2213,9 +2213,9 @@ class BossBar(Object):
         pygame.draw.rect(self.image, color, (2, self.rect.height-2, self.rect.width-4, 2))
         self.update_hitbox()
         self.color = [(52, 215, 51), (51, 62, 215), (215, 51, 51)][self.gc.difficulty]
-        self.target_y = 0
         self.layer = 9999
     def update(self):
+        self.target_y = 2 if Settings.enable_shaders else 0
         if self.rect.y != self.target_y:
             ofs = (self.target_y-self.rect.y)/8
             self.rect.y += math.floor(ofs) if self.rect.y > self.target_y else math.ceil(ofs)

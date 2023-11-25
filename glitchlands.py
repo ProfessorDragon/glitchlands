@@ -555,11 +555,12 @@ class GameController(GameControllerBase):
             else:
                 ui.create_graphic(self, self.assets.decoration.get("title"), cy=120, anim_delay=30)
                 hours, rem = divmod(self.elapsed_time, 3600)
-                minutes, seconds = divmod(rem, 60)
+                minutes, rem = divmod(rem, 60)
+                seconds, milliseconds = divmod(rem, 1)
                 text = "Congratulations!\nYou have beaten the game\non "
                 text += ["Rookie", "Normal", "Master"][self.difficulty]
                 text += " difficulty.\n\nTime: "
-                text += "{:0>2}:{:0>2}:{:0>2}".format(int(hours), int(minutes), int(seconds))
+                text += "{:0>2}:{:0>2}:{:0>2}:{:0>2}".format(int(hours), int(minutes), int(seconds), math.ceil(milliseconds*100))
                 text += f"  Deaths: {self.death_count}\n\n"
                 if submenu == SUBMENU_UNLOCK_MASTER: text += "Master difficulty has\nbeen unlocked"
                 elif submenu == SUBMENU_UNLOCK_SPEEDRUN: text += "Speedrun mode has been\nunlocked"
