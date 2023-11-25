@@ -1096,7 +1096,7 @@ class GameController(GameControllerBase):
             if not self.in_game or self.glitch_chance <= 0 or random.randint(0, self.glitch_chance)//2 > 0:
                 if self.in_game and self.selection.menu == MENU_IN_GAME:
                     cx, cy = self.game_width//2, self.player.y+self.player.recth//2
-                    amount = (4000-self.glitch_chance)/200000 if self.glitch_chance > 0 else 0.008
+                    amount = (4000-self.glitch_chance)/250000 if self.glitch_chance > 0 else 0.008
                     if self.level.level_pos[0] == 0: cy = self.game_height//2
                 else:
                     cx, cy = self.game_width//2, self.game_height//2
