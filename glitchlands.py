@@ -349,10 +349,9 @@ class GameController(GameControllerBase):
             self.shown_settings.append("speedrun_mode")
             if not GlobalSave.unlock_master:
                 unlock = SUBMENU_UNLOCK_MASTER_SPEEDRUN
-                GlobalSave.unlock_master = True
         elif not GlobalSave.unlock_master:
             unlock = SUBMENU_UNLOCK_MASTER
-            GlobalSave.unlock_master = True
+        GlobalSave.unlock_master = True
         GlobalSave.save()
         self.glitch_chance = -1
         self.save_progress()
@@ -1227,11 +1226,13 @@ class GameController(GameControllerBase):
 
     def set_checkpoint(self, bypass_rookie=False, **kwargs):
         if self.level.rookie_checkpoints and self.difficulty > 0 and not bypass_rookie:
-            return
+            return False
         cp = Checkpoint(self.level.level_pos, facing_right=self.player.facing_right, **kwargs)
-        if not cp.valid: return
+        if not cp.valid:
+            return False
         self.checkpoint = cp
         self.save_progress()
+        return True
     
     def show_transition(self, level=None, num=None):
         if level is None and self.level is not None: level = self.level
@@ -1337,8 +1338,8 @@ class GameController(GameControllerBase):
         if self.level.checkpoint_positions[2] is not None:
             prev = self.checkpoint.get_any_pos()
             prev = (prev[0]+(self.checkpoint.level_pos[1]-self.level.level_pos[1])*self.game_width, prev[1])
-            self.set_checkpoint(bottom=self.level.checkpoint_positions[2], right=self.game_width)
-            if self.checkpoint.get_any_pos() != prev:
+            ok = self.set_checkpoint(bottom=self.level.checkpoint_positions[2], right=self.game_width)
+            if ok and self.checkpoint.get_any_pos() != prev:
                 self.player.spawn_particles_checkpoint(center=(self.game_width, self.checkpoint.bottom))
     
     def warp_right(self):
@@ -1373,8 +1374,8 @@ class GameController(GameControllerBase):
         if self.level.checkpoint_positions[0] is not None:
             prev = self.checkpoint.get_any_pos()
             prev = (prev[0]+(self.checkpoint.level_pos[1]-self.level.level_pos[1])*self.game_width, prev[1])
-            self.set_checkpoint(bottom=self.level.checkpoint_positions[0], left=0)
-            if self.checkpoint.get_any_pos() != prev:
+            ok = self.set_checkpoint(bottom=self.level.checkpoint_positions[0], left=0)
+            if ok and self.checkpoint.get_any_pos() != prev:
                 self.player.spawn_particles_checkpoint(center=(0, self.checkpoint.bottom))
     
     def warp_bottom(self):
@@ -1396,8 +1397,8 @@ class GameController(GameControllerBase):
         self.background.change_to(self.level.background)
         if self.level.checkpoint_positions[1] is not None:
             prev = self.checkpoint.get_set_sides()
-            self.set_checkpoint(centerx=self.level.checkpoint_positions[1], top=0)
-            if self.checkpoint.get_set_sides() != prev:
+            ok = self.set_checkpoint(centerx=self.level.checkpoint_positions[1], top=0)
+            if ok and self.checkpoint.get_set_sides() != prev:
                 self.player.spawn_particles_checkpoint(center=(self.player.x+self.player.rectw//2, self.player.hitbox.height))
 
     def warp_top(self):

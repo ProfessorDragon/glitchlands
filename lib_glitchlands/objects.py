@@ -1714,7 +1714,7 @@ class VirusBoss(Object):
             else: gaps.append((1, 2))
             random.shuffle(gaps)
             gaps = gaps[:5]
-            self.attack_timer = 0
+            self.attack_timer = [60, 40, 20][diff]
             for x, remove in enumerate(gaps):
                 self.attack_timer += 65-diff*3
                 for y in range(6):
@@ -2227,6 +2227,7 @@ class BossBar(Object):
 class VirusTentacle(Object):
     def update_config(self, config):
         super().update_config(config)
+        # 0 is going down, 1 is going up
         self.direction = config.get("direction", 0)
         self.y = -self.gc.game_height-self.tileh*2 if self.direction == 0 else self.gc.game_height
         self.rect = pygame.Rect(self.x, self.y, self.tilew*2, self.gc.game_height+self.tileh*2)
@@ -2242,7 +2243,7 @@ class VirusTentacle(Object):
         self.update_hitbox()
         self.collides = COLLISION_SHIELDBREAK
         self.anim_delay = 2
-        self.drop_delay = config.get("drop_delay", 0)
+        self.drop_delay = config.get("drop_delay", 10)
         self.rise_delay = config.get("rise_delay", 30)
         self.drop_speed = config.get("drop_speed", 15)
         self.rise_speed = config.get("rise_speed", 20)
@@ -2257,6 +2258,16 @@ class VirusTentacle(Object):
             ],
             class_=particles.FadeOutParticle, dirofs=0, count=3, yofs=self.rect.height, xofs=self.rect.width
         ).spawn()
+    def spawn_indicator_particles(self):
+        if self.direction != 1: return
+        particles.ParticleSpawner(
+            self.gc, ("circle_black",),
+            [
+                {"center": (self.rect.centerx, self.gc.game_height-6), "xv": -8, "yv": 0, "fade_time": 12},
+                {"center": (self.rect.centerx, self.gc.game_height-6), "xv": 8, "yv": 0, "fade_time": 12}
+            ],
+            class_=particles.FadeOutParticle, dirofs=0, count=1
+        ).spawn()
     def update_hitbox(self):
         if self.direction in (0, 1):
             self.hitbox = pygame.Rect(self.rect.x+4, self.rect.y, self.rect.w-8, self.rect.h-16)
@@ -2270,6 +2281,7 @@ class VirusTentacle(Object):
             elif self.direction == 1:
                 if self.rect.top > self.gc.game_height: self.self_destruct = True
                 else: self.rect.y += self.rise_speed
+            self.spawn_ambient_particles()
         elif self.anim_frame > self.drop_delay:
             if self.direction == 0:
                 if self.rect.bottom >= self.drop_target-self.drop_speed: self.rect.bottom = self.drop_target
@@ -2277,8 +2289,10 @@ class VirusTentacle(Object):
             elif self.direction == 1:
                 if self.rect.top <= self.drop_target+self.drop_speed: self.rect.top = self.drop_target
                 else: self.rect.y -= self.drop_speed
+            self.spawn_ambient_particles()
+        elif self.anim_frame > self.drop_delay-10 and self.anim_frame%3 == 1 and self.gc.difficulty < 2:
+            self.spawn_indicator_particles()
         self.update_hitbox()
-        self.spawn_ambient_particles()
 
 class Infection(Object):
     def update_config(self, config):
